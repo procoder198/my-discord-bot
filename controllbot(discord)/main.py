@@ -1,5 +1,4 @@
-
-# language: Python 3.10+, file: main.py, target: discord.py v2
+# language: Python 3.10+, file: controllbot.py, target: discord.py v2
 # multi-server control bot — home-guild-locked, owner-only
 
 import discord
@@ -15,7 +14,6 @@ import urllib.request
 import urllib.parse
 import os
 import secrets
-import shutil
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -32,26 +30,26 @@ control_snapshots: dict[int, dict[int, list[int]]] = {}
 subscriptions: dict[int, dict] = {}
 pending_tokens: dict[str, dict] = {}
 
-DISCORD_FILE_LIMIT = 24 * 1024 * 1024
+DISCORD_FILE_LIMIT = 25 * 1024 * 1024
 BAD_THUMB = re.compile(r'(\/xx\/|_recording|\/track\/|1x1|placeholder)', re.I)
-YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
 
-# ── Roblox scripts ─────────────────────────────────────────────────────────────
+# ── Roblox scripts — Lua, KRNL-compatible ─────────────────────────────────────
 ROBLOX_SCRIPTS = {
-
-"fly": '''-- Fly Script | KRNL | Universal
+    "fly": '''-- Fly Script | KRNL compatible | Universal
 local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 local hrp = character:WaitForChild("HumanoidRootPart")
+
 local flying = false
 local speed = 50
 local bodyVel = Instance.new("BodyVelocity")
 local bodyGyro = Instance.new("BodyGyro")
-bodyVel.MaxForce = Vector3.new(1e9,1e9,1e9)
-bodyVel.Velocity = Vector3.new(0,0,0)
-bodyGyro.MaxTorque = Vector3.new(1e9,1e9,1e9)
+bodyVel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+bodyVel.Velocity = Vector3.new(0, 0, 0)
+bodyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
 bodyGyro.P = 1e4
+
 local function toggleFly()
     flying = not flying
     if flying then
@@ -64,11 +62,12 @@ local function toggleFly()
         bodyGyro.Parent = nil
     end
 end
+
 local camera = workspace.CurrentCamera
 game:GetService("RunService").RenderStepped:Connect(function()
     if flying then
         local cf = camera.CFrame
-        local dir = Vector3.new(0,0,0)
+        local dir = Vector3.new(0, 0, 0)
         local uis = game:GetService("UserInputService")
         if uis:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
         if uis:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
@@ -76,879 +75,249 @@ game:GetService("RunService").RenderStepped:Connect(function()
         if uis:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
         if uis:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
         if uis:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0,1,0) end
-        bodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * speed or Vector3.new(0,0,0)
+        bodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * speed or Vector3.new(0, 0, 0)
         bodyGyro.CFrame = cf
     end
 end)
+
 game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.F then toggleFly() end
 end)
-print("[SLEATH] Fly — F to toggle")
+
+print("[SLEATH] Fly loaded — press F to toggle")
 ''',
 
-"esp": '''-- ESP | KRNL | Universal
+    "esp": '''-- ESP Script | KRNL compatible | Shows players through walls
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
 local camera = workspace.CurrentCamera
 local localPlayer = players.LocalPlayer
+
 local espObjects = {}
+local ESP_ENABLED = true
+local TEAM_CHECK = false  -- set true to only show enemies
+
 local function createESP(player)
-    local bg = Instance.new("BillboardGui")
-    bg.Size = UDim2.new(0,100,0,50)
-    bg.StudsOffset = Vector3.new(0,3,0)
-    bg.AlwaysOnTop = true
-    bg.Name = "SLEATH_ESP"
-    local nl = Instance.new("TextLabel", bg)
-    nl.Size = UDim2.new(1,0,0.5,0)
-    nl.BackgroundTransparency = 1
-    nl.TextColor3 = Color3.fromRGB(255,60,60)
-    nl.TextStrokeTransparency = 0
-    nl.Font = Enum.Font.GothamBold
-    nl.TextScaled = true
-    nl.Text = player.Name
-    local dl = Instance.new("TextLabel", bg)
-    dl.Size = UDim2.new(1,0,0.5,0)
-    dl.Position = UDim2.new(0,0,0.5,0)
-    dl.BackgroundTransparency = 1
-    dl.TextColor3 = Color3.fromRGB(255,255,255)
-    dl.TextStrokeTransparency = 0
-    dl.Font = Enum.Font.Gotham
-    dl.TextScaled = true
-    dl.Name = "DistLabel"
-    espObjects[player] = bg
-    return bg
+    local billboardGui = Instance.new("BillboardGui")
+    billboardGui.Size = UDim2.new(0, 100, 0, 50)
+    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+    billboardGui.AlwaysOnTop = true
+    billboardGui.Name = "SLEATH_ESP"
+
+    local nameLabel = Instance.new("TextLabel", billboardGui)
+    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextScaled = true
+    nameLabel.Text = player.Name
+
+    local distLabel = Instance.new("TextLabel", billboardGui)
+    distLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    distLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    distLabel.BackgroundTransparency = 1
+    distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    distLabel.TextStrokeTransparency = 0
+    distLabel.Font = Enum.Font.Gotham
+    distLabel.TextScaled = true
+    distLabel.Name = "DistLabel"
+
+    espObjects[player] = billboardGui
+    return billboardGui
 end
-players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function(char)
+
+local function removeESP(player)
+    if espObjects[player] then
+        espObjects[player]:Destroy()
+        espObjects[player] = nil
+    end
+end
+
+players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(char)
         wait(0.5)
-        if espObjects[p] then espObjects[p]:Destroy() end
-        local hrp = char:WaitForChild("HumanoidRootPart",5)
-        if hrp then local g = createESP(p); g.Adornee = hrp end
+        if espObjects[player] then espObjects[player]:Destroy() end
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        if hrp then
+            local gui = createESP(player)
+            gui.Adornee = hrp
+        end
     end)
 end)
-players.PlayerRemoving:Connect(function(p)
-    if espObjects[p] then espObjects[p]:Destroy(); espObjects[p] = nil end
-end)
-for _,p in ipairs(players:GetPlayers()) do
-    if p ~= localPlayer then
-        local char = p.Character
+
+players.PlayerRemoving:Connect(removeESP)
+
+-- attach to existing players
+for _, player in ipairs(players:GetPlayers()) do
+    if player ~= localPlayer then
+        local char = player.Character
         if char then
             local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then local g = createESP(p); g.Adornee = hrp end
+            if hrp then
+                local gui = createESP(player)
+                gui.Adornee = hrp
+            end
         end
     end
 end
+
+-- update distances
 runService.RenderStepped:Connect(function()
-    local lhrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-    for p, gui in pairs(espObjects) do
-        if gui and gui.Adornee and lhrp then
-            local dist = math.floor((gui.Adornee.Position - lhrp.Position).Magnitude)
-            local dl = gui:FindFirstChild("DistLabel")
-            if dl then dl.Text = dist.." studs" end
+    if not ESP_ENABLED then return end
+    local localHRP = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    for player, gui in pairs(espObjects) do
+        if gui and gui.Adornee and localHRP then
+            local dist = math.floor((gui.Adornee.Position - localHRP.Position).Magnitude)
+            local distLabel = gui:FindFirstChild("DistLabel")
+            if distLabel then distLabel.Text = dist .. " studs" end
         end
     end
 end)
-print("[SLEATH] ESP loaded")
+
+print("[SLEATH] ESP loaded — players visible through walls")
 ''',
 
-"speed": '''-- Speed Hack | KRNL | Universal
+    "speed": '''-- Speed Hack | KRNL compatible | Universal
 local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
+
 local DEFAULT_SPEED = 16
 local FAST_SPEED = 100
 local boosting = false
+
+-- update character on respawn
 player.CharacterAdded:Connect(function(char)
     character = char
     humanoid = char:WaitForChild("Humanoid")
-    if boosting then humanoid.WalkSpeed = FAST_SPEED end
+    if boosting then
+        humanoid.WalkSpeed = FAST_SPEED
+    end
 end)
+
 game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.G then
         boosting = not boosting
         humanoid.WalkSpeed = boosting and FAST_SPEED or DEFAULT_SPEED
+        print("[SLEATH] Speed: " .. (boosting and "ON ("..FAST_SPEED..")" or "OFF"))
     end
+    -- hold Shift for 2x while boost active
     if input.KeyCode == Enum.KeyCode.LeftShift and boosting then
         humanoid.WalkSpeed = FAST_SPEED * 2
     end
 end)
+
 game:GetService("UserInputService").InputEnded:Connect(function(input)
     if input.KeyCode == Enum.KeyCode.LeftShift and boosting then
         humanoid.WalkSpeed = FAST_SPEED
     end
 end)
-print("[SLEATH] Speed — G to toggle")
+
+print("[SLEATH] Speed hack loaded — press G to toggle, hold Shift for 2x")
 ''',
 
-"infjump": '''-- Infinite Jump | KRNL | Universal
+    "infjump": '''-- Infinite Jump | KRNL compatible | Universal
 local uis = game:GetService("UserInputService")
 local player = game.Players.LocalPlayer
+
 local enabled = true
+
 uis.JumpRequest:Connect(function()
     if not enabled then return end
-    local char = player.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum and hum:GetState() ~= Enum.HumanoidStateType.Dead then
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    local character = player.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 end)
+
 uis.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.H then
         enabled = not enabled
-        print("[SLEATH] Inf jump: "..(enabled and "ON" or "OFF"))
+        print("[SLEATH] Infinite jump: " .. (enabled and "ON" or "OFF"))
     end
 end)
-print("[SLEATH] Infinite jump — H to toggle")
+
+print("[SLEATH] Infinite jump loaded — press H to toggle")
 ''',
 
-"aimbot": '''-- Silent Aimbot | KRNL | Drawing API
+    "aimbot": '''-- Silent Aimbot | KRNL compatible | Locks to nearest player head
+-- silent aim: prediction on your client only, server sees normal shots
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
 local uis = game:GetService("UserInputService")
 local camera = workspace.CurrentCamera
 local localPlayer = players.LocalPlayer
+
 local ENABLED = false
-local FOV = 200
-local SMOOTHING = 0.3
+local FOV = 200  -- pixel radius to lock within
+local SMOOTHING = 0.3  -- 0 = instant lock, 1 = slow
+
+-- FOV circle indicator
 local fovCircle = Drawing.new("Circle")
 fovCircle.Thickness = 1
-fovCircle.Color = Color3.fromRGB(255,255,255)
+fovCircle.Color = Color3.fromRGB(255, 255, 255)
 fovCircle.Filled = false
 fovCircle.Radius = FOV
 fovCircle.Visible = false
-fovCircle.Position = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+fovCircle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
 local function getNearestTarget()
-    local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
     local closest, closestDist = nil, math.huge
-    for _,p in ipairs(players:GetPlayers()) do
-        if p == localPlayer then continue end
-        local char = p.Character
+
+    for _, player in ipairs(players:GetPlayers()) do
+        if player == localPlayer then continue end
+        local char = player.Character
         if not char then continue end
         local head = char:FindFirstChild("Head")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not head or not hum or hum.Health <= 0 then continue end
-        local sp, onScreen = camera:WorldToViewportPoint(head.Position)
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not head or not humanoid or humanoid.Health <= 0 then continue end
+
+        local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
         if not onScreen then continue end
-        local dist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-        if dist < closestDist and dist < FOV then closest = head; closestDist = dist end
+
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+        if dist < closestDist and dist < FOV then
+            closest = head
+            closestDist = dist
+        end
     end
     return closest
 end
+
 runService.RenderStepped:Connect(function()
-    fovCircle.Position = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+    fovCircle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
     fovCircle.Visible = ENABLED
+
     if not ENABLED then return end
     local target = getNearestTarget()
     if not target then return end
-    camera.CFrame = camera.CFrame:Lerp(CFrame.new(camera.CFrame.Position, target.Position), SMOOTHING)
+
+    local targetCF = CFrame.new(camera.CFrame.Position, target.Position)
+    camera.CFrame = camera.CFrame:Lerp(targetCF, SMOOTHING)
 end)
+
 uis.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.J then
         ENABLED = not ENABLED
-        print("[SLEATH] Aimbot: "..(ENABLED and "ON" or "OFF"))
+        print("[SLEATH] Aimbot: " .. (ENABLED and "ON" or "OFF"))
     end
     if input.KeyCode == Enum.KeyCode.U then
         FOV = FOV == 200 and 400 or 200
         fovCircle.Radius = FOV
+        print("[SLEATH] FOV: " .. FOV)
     end
 end)
-print("[SLEATH] Aimbot — J toggle, U cycle FOV")
-''',
 
-"noclip": '''-- NoClip | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local connection
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.N then
-        enabled = not enabled
-        print("[SLEATH] NoClip: "..(enabled and "ON" or "OFF"))
-        if enabled then
-            connection = game:GetService("RunService").Stepped:Connect(function()
-                local char = player.Character
-                if not char then return end
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = false end
-                end
-            end)
-        else
-            if connection then connection:Disconnect(); connection = nil end
-            local char = player.Character
-            if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then hrp.CanCollide = true end
-            end
-        end
-    end
-end)
-print("[SLEATH] NoClip — N to toggle")
-''',
-
-"teleport": '''-- Teleport to Player | KRNL | Universal
-local player = game.Players.LocalPlayer
-local function teleportToPlayer(targetName)
-    local target = game.Players:FindFirstChild(targetName)
-    if not target then print("[SLEATH] Not found: "..targetName); return end
-    local targetChar = target.Character
-    local myChar = player.Character
-    if not targetChar or not myChar then return end
-    local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
-    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
-    if not targetHRP or not myHRP then return end
-    myHRP.CFrame = targetHRP.CFrame + Vector3.new(0,3,0)
-    print("[SLEATH] Teleported to "..targetName)
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.K then
-        local myChar = player.Character
-        local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myHRP then return end
-        local closest, closestDist = nil, math.huge
-        for _, p in ipairs(game.Players:GetPlayers()) do
-            if p == player then continue end
-            local char = p.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not hrp then continue end
-            local dist = (hrp.Position - myHRP.Position).Magnitude
-            if dist < closestDist then closest = p; closestDist = dist end
-        end
-        if closest then teleportToPlayer(closest.Name) end
-    end
-end)
-print("[SLEATH] Teleport — K to nearest player")
-''',
-
-"bringplayer": '''-- Bring Player | KRNL | Universal
-local player = game.Players.LocalPlayer
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.B then
-        local myChar = player.Character
-        local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myHRP then return end
-        local closest, closestDist = nil, math.huge
-        for _, p in ipairs(game.Players:GetPlayers()) do
-            if p == player then continue end
-            local char = p.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not hrp then continue end
-            local dist = (hrp.Position - myHRP.Position).Magnitude
-            if dist < closestDist then closest = p; closestDist = dist end
-        end
-        if closest and closest.Character then
-            local hrp = closest.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.CFrame = myHRP.CFrame + Vector3.new(2,0,0) end
-        end
-    end
-end)
-print("[SLEATH] Bring Player — B to pull nearest")
-''',
-
-"godmode": '''-- God Mode | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local function applyGod(char)
-    local hum = char:WaitForChild("Humanoid")
-    hum.HealthChanged:Connect(function(newHealth)
-        if enabled and newHealth < hum.MaxHealth then hum.Health = hum.MaxHealth end
-    end)
-end
-player.CharacterAdded:Connect(applyGod)
-if player.Character then applyGod(player.Character) end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.P then
-        enabled = not enabled
-        if enabled and player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid")
-            if hum then hum.Health = hum.MaxHealth end
-        end
-        print("[SLEATH] God mode: "..(enabled and "ON" or "OFF"))
-    end
-end)
-print("[SLEATH] God mode — P to toggle")
-''',
-
-"fullbright": '''-- Fullbright | KRNL | Universal
-local lighting = game:GetService("Lighting")
-local enabled = false
-local original = {}
-local function saveOriginal()
-    original.Brightness = lighting.Brightness
-    original.ClockTime = lighting.ClockTime
-    original.FogEnd = lighting.FogEnd
-    original.GlobalShadows = lighting.GlobalShadows
-    original.Ambient = lighting.Ambient
-    original.OutdoorAmbient = lighting.OutdoorAmbient
-end
-local function applyFullbright()
-    lighting.Brightness = 2
-    lighting.ClockTime = 14
-    lighting.FogEnd = 100000
-    lighting.GlobalShadows = false
-    lighting.Ambient = Color3.fromRGB(255,255,255)
-    lighting.OutdoorAmbient = Color3.fromRGB(255,255,255)
-    for _, effect in ipairs(lighting:GetChildren()) do
-        if effect:IsA("PostEffect") or effect:IsA("Sky") then effect.Enabled = false end
-    end
-end
-local function restoreOriginal()
-    lighting.Brightness = original.Brightness
-    lighting.ClockTime = original.ClockTime
-    lighting.FogEnd = original.FogEnd
-    lighting.GlobalShadows = original.GlobalShadows
-    lighting.Ambient = original.Ambient
-    lighting.OutdoorAmbient = original.OutdoorAmbient
-    for _, effect in ipairs(lighting:GetChildren()) do
-        if effect:IsA("PostEffect") or effect:IsA("Sky") then effect.Enabled = true end
-    end
-end
-saveOriginal()
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.L then
-        enabled = not enabled
-        if enabled then applyFullbright() else restoreOriginal() end
-        print("[SLEATH] Fullbright: "..(enabled and "ON" or "OFF"))
-    end
-end)
-print("[SLEATH] Fullbright — L to toggle")
-''',
-
-"antivoid": '''-- Anti-Void | KRNL | Universal
-local player = game.Players.LocalPlayer
-local lastSafePos = nil
-local VOID_THRESHOLD = -100
-game:GetService("RunService").Heartbeat:Connect(function()
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    if hrp.Position.Y > VOID_THRESHOLD then
-        lastSafePos = hrp.CFrame
-    else
-        if lastSafePos then hrp.CFrame = lastSafePos end
-    end
-end)
-print("[SLEATH] Anti-void active")
-''',
-
-"chesthop": '''-- Chest Hop | KRNL | Universal
-local player = game.Players.LocalPlayer
-local LOOT_KEYWORDS = {"chest","loot","treasure","crate","drop","pickup","coin","gem","item"}
-local function isLootObject(obj)
-    local name = obj.Name:lower()
-    for _, kw in ipairs(LOOT_KEYWORDS) do if name:find(kw) then return true end end
-    return false
-end
-local function collectAll()
-    local char = player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local count = 0
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and isLootObject(obj) then
-            hrp.CFrame = obj.CFrame + Vector3.new(0,3,0)
-            local prompt = obj:FindFirstChildOfClass("ProximityPrompt") or obj.Parent:FindFirstChildOfClass("ProximityPrompt")
-            if prompt then fireproximityprompt(prompt) end
-            count = count + 1
-            wait(0.15)
-        end
-    end
-    print("[SLEATH] Collected "..count.." objects")
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.C then collectAll() end
-end)
-print("[SLEATH] Chest hop — C to collect")
-''',
-
-"autoclick": '''-- Auto Clicker | KRNL | Universal
-local uis = game:GetService("UserInputService")
-local enabled = false
-local CLICK_DELAY = 0.05
-local function autoClick()
-    while enabled do
-        local mouse = game.Players.LocalPlayer:GetMouse()
-        game:GetService("VirtualInputManager"):SendMouseButtonEvent(mouse.X, mouse.Y, 0, true, game, 0)
-        wait(CLICK_DELAY/2)
-        game:GetService("VirtualInputManager"):SendMouseButtonEvent(mouse.X, mouse.Y, 0, false, game, 0)
-        wait(CLICK_DELAY/2)
-    end
-end
-uis.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.X then
-        enabled = not enabled
-        print("[SLEATH] Auto clicker: "..(enabled and "ON" or "OFF"))
-        if enabled then coroutine.wrap(autoClick)() end
-    end
-end)
-print("[SLEATH] Auto clicker — X to toggle")
-''',
-
-"playerlist": '''-- Player List | KRNL | Universal
-local players = game:GetService("Players")
-local localPlayer = players.LocalPlayer
-local function printPlayerList()
-    print("===== SLEATH PLAYER LIST =====")
-    for _, player in ipairs(players:GetPlayers()) do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local pos = hrp and math.floor(hrp.Position.X)..","..math.floor(hrp.Position.Y)..","..math.floor(hrp.Position.Z) or "unknown"
-        local health = hum and math.floor(hum.Health).."/"..math.floor(hum.MaxHealth) or "N/A"
-        local dist = "N/A"
-        if hrp and localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            dist = tostring(math.floor((hrp.Position - localPlayer.Character.HumanoidRootPart.Position).Magnitude))
-        end
-        print(string.format("[%s] ID:%d | HP:%s | Dist:%s | Pos:(%s)", player.Name, player.UserId, health, dist, pos))
-    end
-    print("================================")
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.Tab then printPlayerList() end
-end)
-printPlayerList()
-print("[SLEATH] Player list — Tab to refresh")
-''',
-
-"spinhack": '''-- Spin Hack | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local connection
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.Z then
-        enabled = not enabled
-        if enabled then
-            connection = game:GetService("RunService").RenderStepped:Connect(function()
-                local char = player.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp then hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(30), 0) end
-            end)
-        else
-            if connection then connection:Disconnect(); connection = nil end
-        end
-        print("[SLEATH] Spin: "..(enabled and "ON" or "OFF"))
-    end
-end)
-print("[SLEATH] Spin — Z to toggle")
-''',
-
-"antigravity": '''-- Low Gravity | KRNL | Universal
-local enabled = false
-local DEFAULT_GRAVITY = workspace.Gravity
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.M then
-        enabled = not enabled
-        workspace.Gravity = enabled and 20 or DEFAULT_GRAVITY
-        print("[SLEATH] Low gravity: "..(enabled and "ON" or "OFF"))
-    end
-end)
-print("[SLEATH] Low gravity — M to toggle")
-''',
-
-"reachextend": '''-- Reach Extender | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local REACH = 30
-local function extendReach(char)
-    for _, tool in ipairs(char:GetChildren()) do
-        if tool:IsA("Tool") then
-            local handle = tool:FindFirstChild("Handle")
-            if handle then handle.Size = enabled and Vector3.new(REACH,1,1) or Vector3.new(1,1,1) end
-        end
-    end
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.R then
-        enabled = not enabled
-        local char = player.Character
-        if char then extendReach(char) end
-        print("[SLEATH] Reach: "..(enabled and "ON" or "OFF"))
-    end
-end)
-player.CharacterAdded:Connect(function(char)
-    char.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") and enabled then extendReach(char) end
-    end)
-end)
-print("[SLEATH] Reach extender — R to toggle")
-''',
-
-"killaura": '''-- Kill Aura | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local RANGE = 15
-local function killAura()
-    while enabled do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            for _, p in ipairs(game.Players:GetPlayers()) do
-                if p == player then continue end
-                local tc = p.Character
-                local thrp = tc and tc:FindFirstChild("HumanoidRootPart")
-                local thum = tc and tc:FindFirstChildOfClass("Humanoid")
-                if thrp and thum and thum.Health > 0 then
-                    if (thrp.Position - hrp.Position).Magnitude <= RANGE then
-                        local orig = hrp.CFrame
-                        hrp.CFrame = thrp.CFrame
-                        wait(0.05)
-                        hrp.CFrame = orig
-                    end
-                end
-            end
-        end
-        wait(0.1)
-    end
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.Quote then
-        enabled = not enabled
-        print("[SLEATH] Kill aura: "..(enabled and "ON" or "OFF"))
-        if enabled then coroutine.wrap(killAura)() end
-    end
-end)
-print("[SLEATH] Kill aura — apostrophe to toggle")
-''',
-
-"autofarm": '''-- Auto Farm | KRNL | Universal
-local player = game.Players.LocalPlayer
-local NPC_KEYWORDS = {"enemy","zombie","monster","npc","mob","bandit","boss","creature","alien"}
-local enabled = false
-local ATTACK_RANGE = 10
-local function isEnemy(model)
-    local name = model.Name:lower()
-    for _, kw in ipairs(NPC_KEYWORDS) do if name:find(kw) then return true end end
-    return false
-end
-local function getNearestEnemy(hrp)
-    local closest, closestDist = nil, math.huge
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and isEnemy(obj) then
-            local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChildOfClass("BasePart")
-            local hum = obj:FindFirstChildOfClass("Humanoid")
-            if root and hum and hum.Health > 0 then
-                local dist = (root.Position - hrp.Position).Magnitude
-                if dist < closestDist then closest = root; closestDist = dist end
-            end
-        end
-    end
-    return closest, closestDist
-end
-local function farm()
-    while enabled do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hrp and hum then
-            local target, dist = getNearestEnemy(hrp)
-            if target then
-                if dist > ATTACK_RANGE then
-                    hum:MoveTo(target.Position)
-                else
-                    for _, tool in ipairs(char:GetChildren()) do
-                        if tool:IsA("Tool") then
-                            for _, r in ipairs(tool:GetDescendants()) do
-                                if r:IsA("RemoteEvent") then pcall(function() r:FireServer() end) end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        wait(0.2)
-    end
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.O then
-        enabled = not enabled
-        print("[SLEATH] Auto farm: "..(enabled and "ON" or "OFF"))
-        if enabled then coroutine.wrap(farm)() end
-    end
-end)
-print("[SLEATH] Auto farm — O to toggle")
-''',
-
-"camlock": '''-- Camera Lock | KRNL | Universal
-local player = game.Players.LocalPlayer
-local camera = workspace.CurrentCamera
-local runService = game:GetService("RunService")
-local enabled = false
-local function getNearest()
-    local myChar = player.Character
-    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return nil end
-    local closest, closestDist = nil, math.huge
-    for _, p in ipairs(game.Players:GetPlayers()) do
-        if p == player then continue end
-        local char = p.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hrp and hum and hum.Health > 0 then
-            local dist = (hrp.Position - myHRP.Position).Magnitude
-            if dist < closestDist then closest = hrp; closestDist = dist end
-        end
-    end
-    return closest
-end
-runService.RenderStepped:Connect(function()
-    if not enabled then return end
-    local target = getNearest()
-    if not target then return end
-    camera.CFrame = CFrame.new(camera.CFrame.Position, target.Position)
-end)
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.Q then
-        enabled = not enabled
-        print("[SLEATH] Cam lock: "..(enabled and "ON" or "OFF"))
-    end
-end)
-print("[SLEATH] Camera lock — Q to toggle")
-''',
-
-"chatspy": '''-- Chat Spy | KRNL | Universal
-local players = game:GetService("Players")
-players.PlayerAdded:Connect(function(p)
-    p.Chatted:Connect(function(msg)
-        print(string.format("[SLEATH CHAT] [%s] %s: %s", os.date("%H:%M:%S"), p.Name, msg))
-    end)
-end)
-for _, p in ipairs(players:GetPlayers()) do
-    p.Chatted:Connect(function(msg)
-        print(string.format("[SLEATH CHAT] [%s] %s: %s", os.date("%H:%M:%S"), p.Name, msg))
-    end)
-end
-print("[SLEATH] Chat spy active")
-''',
-
-"wallhop": '''-- Bhop | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local connection
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.V then
-        enabled = not enabled
-        if enabled then
-            connection = game:GetService("RunService").Heartbeat:Connect(function()
-                local char = player.Character
-                local hum = char and char:FindFirstChildOfClass("Humanoid")
-                if hum and hum:GetState() == Enum.HumanoidStateType.Landed then
-                    hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                end
-            end)
-        else
-            if connection then connection:Disconnect(); connection = nil end
-        end
-        print("[SLEATH] Bhop: "..(enabled and "ON" or "OFF"))
-    end
-end)
-print("[SLEATH] Bhop — V to toggle")
-''',
-
-"hitbox": '''-- Hitbox Expander | KRNL | Universal
-local players = game.Players
-local SIZE = Vector3.new(8,8,8)
-local enabled = false
-local origSizes = {}
-local function expandHitboxes()
-    for _, p in ipairs(players:GetPlayers()) do
-        if p == players.LocalPlayer then continue end
-        local char = p.Character
-        if not char then continue end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then origSizes[p.Name] = hrp.Size; hrp.Size = SIZE; hrp.Transparency = 0.9 end
-    end
-end
-local function restoreHitboxes()
-    for _, p in ipairs(players:GetPlayers()) do
-        local char = p.Character
-        if not char then continue end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp and origSizes[p.Name] then hrp.Size = origSizes[p.Name]; hrp.Transparency = 1 end
-    end
-    origSizes = {}
-end
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.Semicolon then
-        enabled = not enabled
-        if enabled then expandHitboxes() else restoreHitboxes() end
-        print("[SLEATH] Hitbox: "..(enabled and "ON" or "OFF"))
-    end
-end)
-players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function()
-        if enabled then wait(0.5); expandHitboxes() end
-    end)
-end)
-print("[SLEATH] Hitbox expander — semicolon to toggle")
-''',
-
-"anticheatbypass": '''-- AC Spoof | KRNL | Universal
-local player = game.Players.LocalPlayer
-local runService = game:GetService("RunService")
-local function spoofHumanoid(char)
-    local hum = char:WaitForChild("Humanoid")
-    local mt = getrawmetatable(hum)
-    if mt then
-        local oldIndex = mt.__index
-        setreadonly(mt, false)
-        mt.__index = function(self, key)
-            if key == "WalkSpeed" then return 16 end
-            if key == "JumpPower" then return 50 end
-            return oldIndex(self, key)
-        end
-        setreadonly(mt, true)
-    end
-end
-player.CharacterAdded:Connect(spoofHumanoid)
-if player.Character then pcall(spoofHumanoid, player.Character) end
-runService.Heartbeat:Connect(function()
-    local char = player.Character
-    if not char then return end
-    for _, v in ipairs(char:GetDescendants()) do
-        if v:IsA("BodyMover") then pcall(function() v.Name = "RootAttachment" end) end
-    end
-end)
-print("[SLEATH] AC spoof active")
-''',
-
-"customgui": '''-- GUI Hub | KRNL | Universal
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SLEATH_HUB"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = game.CoreGui
-local Frame = Instance.new("Frame", ScreenGui)
-Frame.Size = UDim2.new(0,200,0,40)
-Frame.Position = UDim2.new(0,10,0.5,-20)
-Frame.BackgroundColor3 = Color3.fromRGB(20,20,20)
-Frame.BorderSizePixel = 0
-Frame.Active = true
-Frame.Draggable = true
-local Title = Instance.new("TextLabel", Frame)
-Title.Size = UDim2.new(0.8,0,1,0)
-Title.BackgroundTransparency = 1
-Title.TextColor3 = Color3.fromRGB(255,60,60)
-Title.Font = Enum.Font.GothamBold
-Title.TextScaled = true
-Title.Text = "SLEATH"
-local ExpandBtn = Instance.new("TextButton", Frame)
-ExpandBtn.Size = UDim2.new(0,20,1,0)
-ExpandBtn.Position = UDim2.new(1,-20,0,0)
-ExpandBtn.BackgroundColor3 = Color3.fromRGB(255,60,60)
-ExpandBtn.TextColor3 = Color3.fromRGB(255,255,255)
-ExpandBtn.Font = Enum.Font.GothamBold
-ExpandBtn.Text = "+"
-ExpandBtn.TextScaled = true
-ExpandBtn.BorderSizePixel = 0
-local expanded = false
-local buttonList = {}
-local TOGGLES = {
-    "F  Fly", "G  Speed", "H  Inf Jump", "J  Aimbot",
-    "N  NoClip", "P  God Mode", "L  Fullbright", "M  Low Gravity",
-    "V  Bhop", "Z  Spin", "R  Reach", "B  Bring", "K  Teleport",
-    "O  Auto Farm", "Q  Cam Lock", "X  Auto Click", "C  Chest Hop",
-}
-local function buildButtons()
-    for i, label in ipairs(TOGGLES) do
-        local btn = Instance.new("TextLabel", Frame)
-        btn.Size = UDim2.new(1,-20,0,24)
-        btn.Position = UDim2.new(0,0,0,40+(i-1)*25)
-        btn.BackgroundColor3 = Color3.fromRGB(35,35,35)
-        btn.TextColor3 = Color3.fromRGB(200,200,200)
-        btn.Font = Enum.Font.Gotham
-        btn.TextScaled = true
-        btn.Text = label
-        btn.BorderSizePixel = 0
-        table.insert(buttonList, btn)
-    end
-    Frame.Size = UDim2.new(0,200,0,40+#TOGGLES*25)
-end
-local function removeButtons()
-    for _, btn in ipairs(buttonList) do btn:Destroy() end
-    buttonList = {}
-    Frame.Size = UDim2.new(0,200,0,40)
-end
-ExpandBtn.MouseButton1Click:Connect(function()
-    expanded = not expanded
-    ExpandBtn.Text = expanded and "-" or "+"
-    if expanded then buildButtons() else removeButtons() end
-end)
-print("[SLEATH] GUI Hub — drag panel, + to expand")
-''',
-
-"speedvault": '''-- Speed Vault | KRNL | Universal
-local player = game.Players.LocalPlayer
-local enabled = false
-local VAULT_SPEED = 80
-local VAULT_DURATION = 0.3
-game:GetService("UserInputService").InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.Comma then
-        enabled = not enabled
-        print("[SLEATH] Speed vault: "..(enabled and "ON" or "OFF"))
-    end
-    if input.KeyCode == Enum.KeyCode.Space and enabled then
-        local char = player.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            local orig = hum.WalkSpeed
-            hum.WalkSpeed = VAULT_SPEED
-            wait(VAULT_DURATION)
-            if hum.WalkSpeed == VAULT_SPEED then hum.WalkSpeed = orig end
-        end
-    end
-end)
-print("[SLEATH] Speed vault — comma to enable, Space to vault")
-''',
-
-}
-
-ROBLOX_META = {
-    "fly":              ("Fly",             "Full 6-axis fly.",                                          "F to toggle"),
-    "esp":              ("ESP",             "See players through walls with distance.",                  "Always on"),
-    "speed":            ("Speed Hack",      "100 walkspeed, Shift for 2x.",                             "G to toggle"),
-    "infjump":          ("Infinite Jump",   "Jump unlimited times mid-air.",                            "H to toggle"),
-    "aimbot":           ("Aimbot",          "Silent aim locks to nearest head in FOV.",                 "J to toggle, U for FOV"),
-    "noclip":           ("NoClip",          "Walk through all geometry.",                               "N to toggle"),
-    "teleport":         ("Teleport",        "Teleport to nearest player instantly.",                    "K to teleport"),
-    "bringplayer":      ("Bring Player",    "Pull nearest player to your position.",                    "B to bring"),
-    "godmode":          ("God Mode",        "Health cannot decrease.",                                  "P to toggle"),
-    "fullbright":       ("Fullbright",      "Remove all darkness and fog.",                             "L to toggle"),
-    "antivoid":         ("Anti-Void",       "Auto-return if you fall out of the map.",                  "Always active"),
-    "chesthop":         ("Chest Hop",       "Auto-loot all chests in the game.",                       "C to collect"),
-    "autoclick":        ("Auto Clicker",    "20 clicks per second.",                                   "X to toggle"),
-    "playerlist":       ("Player List",     "All players with health, position, distance.",             "Tab to refresh"),
-    "spinhack":         ("Spin Hack",       "Spin your character rapidly.",                            "Z to toggle"),
-    "antigravity":      ("Low Gravity",     "Moon-walk gravity.",                                      "M to toggle"),
-    "reachextend":      ("Reach Extender",  "Extend melee weapon reach to 30 units.",                  "R to toggle"),
-    "killaura":         ("Kill Aura",       "Rapid-teleport damage to nearby players.",                "' to toggle"),
-    "autofarm":         ("Auto Farm",       "Walk to and attack nearest NPC enemy.",                   "O to toggle"),
-    "camlock":          ("Camera Lock",     "Lock camera facing nearest player.",                      "Q to toggle"),
-    "chatspy":          ("Chat Spy",        "Log all chat messages to output.",                        "Always active"),
-    "wallhop":          ("Bhop",            "Auto-jump on land for bunny hop.",                        "V to toggle"),
-    "hitbox":           ("Hitbox Expand",   "Enlarge all enemy hitboxes.",                             "; to toggle"),
-    "anticheatbypass":  ("AC Spoof",        "Hide speed/jump edits from game scanners.",               "Always active"),
-    "customgui":        ("GUI Hub",         "Draggable on-screen keybind panel.",                      "+ to expand"),
-    "speedvault":       ("Speed Vault",     "Speed burst on jump.",                                    ", to enable, Space to vault"),
+print("[SLEATH] Aimbot loaded — J to toggle, U to cycle FOV")
+'''
 }
 
 
@@ -966,8 +335,8 @@ def has_sub(tier: str):
         sub = subscriptions.get(ctx.author.id)
         if not sub or sub["expires"] < datetime.now(timezone.utc):
             return False
-        order = {"media": 0, "roblox": 1, "tools": 2}
-        return order.get(sub["tier"], -1) >= order.get(tier, 99)
+        order = ["media", "roblox", "tools"]
+        return order.index(sub["tier"]) >= order.index(tier)
     return commands.check(predicate)
 
 
@@ -1046,12 +415,12 @@ async def on_guild_channel_create(channel: discord.abc.GuildChannel):
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(error, (commands.NotOwner, commands.CheckFailure)):
         if isinstance(error, commands.CheckFailure) and ctx.command and ctx.command.name not in ("cmds", "redeem", "mysub", "plans"):
-            await ctx.send("no active subscription — `!plans` to see options.")
+            await ctx.send("no active subscription for this feature — use `!plans`.")
         return
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"missing argument: `{error.param.name}`"); return
     if isinstance(error, commands.BadArgument):
-        await ctx.send("bad argument"); return
+        await ctx.send("bad argument — check `!cmds`"); return
     if isinstance(error, commands.CommandNotFound):
         return
     await ctx.send(f"error: `{error}`")
@@ -1064,10 +433,19 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 @bot.command(name="plans")
 async def show_plans(ctx: commands.Context):
     embed = discord.Embed(title="SLEATH — subscription tiers", color=0x2b2d31)
-    embed.add_field(name="📸 Media — £5/week", value="`!image` `!images` `!imagesave` `!video` `!videos`\nAdult image + video search", inline=False)
-    embed.add_field(name="🎮 Roblox — £7/week", value="25 Lua scripts for KRNL executor\n`!rbxfly` `!rbxesp` `!rbxspeed` and 22 more", inline=False)
-    embed.add_field(name="⚙️ Tools — £10/week", value="`!massdm` `!cloneserver` `!backup` `!profiler` `!raidwatch`\nAll tiers included", inline=False)
-    embed.add_field(name="How to buy", value="DM the owner — you'll receive a token to `!redeem <token>`", inline=False)
+    embed.add_field(name="📸 Media — £5/week", value=(
+        "`!image` `!images` `!imagesave` `!video` `!videos`\n"
+        "Adult image + video search"
+    ), inline=False)
+    embed.add_field(name="🎮 Roblox — £7/week", value=(
+        "`!rbxfly` `!rbxesp` `!rbxspeed` `!rbxinfjump` `!rbxaimbot`\n"
+        "Lua scripts for KRNL executor — copy + inject"
+    ), inline=False)
+    embed.add_field(name="⚙️ Tools — £10/week", value=(
+        "`!massdm` `!cloneserver` `!backup` `!profiler` `!raidwatch`\n"
+        "All tiers included"
+    ), inline=False)
+    embed.add_field(name="How to buy", value="DM the owner — you'll get a token to `!redeem <token>`", inline=False)
     await ctx.send(embed=embed)
 
 
@@ -1080,7 +458,9 @@ async def gen_token(ctx: commands.Context, tier: str, days: int):
         await ctx.send("days 1–365"); return
     token = secrets.token_urlsafe(16)
     pending_tokens[token] = {"tier": tier, "days": days, "created": datetime.now(timezone.utc)}
-    await ctx.author.send(f"✓ token\ntier: `{tier}` | `{days}` day(s)\n```\n{token}\n```\nexpires in 48h if unredeemed.")
+    await ctx.author.send(
+        f"✓ token generated\ntier: `{tier}` | `{days}` day(s)\n```\n{token}\n```\nexpires in 48h if unredeemed."
+    )
     await ctx.send("✓ token sent to your DMs.")
 
 
@@ -1091,7 +471,7 @@ async def redeem_token(ctx: commands.Context, token: str):
         await ctx.send("invalid or already used token."); return
     if datetime.now(timezone.utc) - t["created"] > timedelta(hours=48):
         del pending_tokens[token]
-        await ctx.send("token expired."); return
+        await ctx.send("token expired — contact the seller for a new one."); return
     expires = datetime.now(timezone.utc) + timedelta(days=t["days"])
     subscriptions[ctx.author.id] = {"tier": t["tier"], "expires": expires}
     del pending_tokens[token]
@@ -1130,36 +510,85 @@ async def revoke_sub(ctx: commands.Context, user_id: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ROBLOX SCRIPTS
+#  ROBLOX SCRIPTS  (roblox tier)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _send_script_embed(name: str, description: str, keybind: str, script: str) -> tuple[discord.Embed, discord.File]:
     embed = discord.Embed(title=f"SLEATH — {name}", description=description, color=0x2b2d31)
     embed.add_field(name="Executor", value="KRNL (free) or Synapse X", inline=True)
     embed.add_field(name="Keybind", value=f"`{keybind}`", inline=True)
-    embed.add_field(name="How to use", value="1. Open Roblox\n2. Attach executor\n3. Paste script\n4. Execute", inline=False)
+    embed.add_field(name="How to use", value="1. Open Roblox game\n2. Attach executor\n3. Paste script\n4. Execute", inline=False)
     file = discord.File(fp=io.BytesIO(script.encode()), filename=f"sleath_{name.lower().replace(' ','_')}.lua")
     return embed, file
 
 
-def _make_rbx_cmd(script_key: str):
-    meta = ROBLOX_META[script_key]
-    async def _cmd(ctx: commands.Context):
-        embed, file = _send_script_embed(meta[0], meta[1], meta[2], ROBLOX_SCRIPTS[script_key])
-        await ctx.author.send(embed=embed, file=file)
-        await ctx.send(f"✓ `{meta[0]}` sent to your DMs.")
-    _cmd.__name__ = f"rbx_{script_key}"
-    return _cmd
+@bot.command(name="rbxfly")
+@has_sub("roblox")
+async def rbx_fly(ctx: commands.Context):
+    embed, file = _send_script_embed(
+        "Fly Script",
+        "Full 6-axis fly — WASD + Space/Ctrl for vertical. Server-side safe.",
+        "F to toggle",
+        ROBLOX_SCRIPTS["fly"]
+    )
+    await ctx.author.send(embed=embed, file=file)
+    await ctx.send("✓ script sent to your DMs.")
 
 
-for _key, _meta in ROBLOX_META.items():
-    _cmd_func = _make_rbx_cmd(_key)
-    _decorated = has_sub("roblox")(_cmd_func)
-    bot.command(name=f"rbx{_key}")(_decorated)
+@bot.command(name="rbxesp")
+@has_sub("roblox")
+async def rbx_esp(ctx: commands.Context):
+    embed, file = _send_script_embed(
+        "ESP / Wallhack",
+        "Renders player names + distance through all geometry. Updates every frame.",
+        "Always on (delete script to remove)",
+        ROBLOX_SCRIPTS["esp"]
+    )
+    await ctx.author.send(embed=embed, file=file)
+    await ctx.send("✓ script sent to your DMs.")
+
+
+@bot.command(name="rbxspeed")
+@has_sub("roblox")
+async def rbx_speed(ctx: commands.Context):
+    embed, file = _send_script_embed(
+        "Speed Hack",
+        "Toggle 100 walkspeed. Hold Shift for 2x. Survives respawns.",
+        "G to toggle, Shift for 2x",
+        ROBLOX_SCRIPTS["speed"]
+    )
+    await ctx.author.send(embed=embed, file=file)
+    await ctx.send("✓ script sent to your DMs.")
+
+
+@bot.command(name="rbxinfjump")
+@has_sub("roblox")
+async def rbx_infjump(ctx: commands.Context):
+    embed, file = _send_script_embed(
+        "Infinite Jump",
+        "Jump as many times as you want mid-air. Works in virtually every game.",
+        "H to toggle",
+        ROBLOX_SCRIPTS["infjump"]
+    )
+    await ctx.author.send(embed=embed, file=file)
+    await ctx.send("✓ script sent to your DMs.")
+
+
+@bot.command(name="rbxaimbot")
+@has_sub("roblox")
+async def rbx_aimbot(ctx: commands.Context):
+    embed, file = _send_script_embed(
+        "Silent Aimbot",
+        "Locks camera to nearest player head within FOV radius. Lerp smoothing prevents snapping. Draws FOV circle via Drawing API.",
+        "J to toggle, U to cycle FOV",
+        ROBLOX_SCRIPTS["aimbot"]
+    )
+    await ctx.author.send(embed=embed, file=file)
+    await ctx.send("✓ script sent to your DMs.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SERVER CONTROL
+#  SERVER CONTROL  (owner only)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @bot.command(name="servers")
@@ -1307,7 +736,7 @@ async def change_nick(ctx: commands.Context, guild_id: int, user_id: int, *, nic
         await member.edit(nick=nickname)
         await ctx.send(f"✓ nick → `{nickname}` for `{member}`")
     except discord.Forbidden:
-        await ctx.send("can't change nick.")
+        await ctx.send("can't change nick — they may outrank the bot.")
 
 
 @bot.command(name="leave")
@@ -1389,7 +818,7 @@ async def delete_message(ctx: commands.Context, channel_id: int, message_id: int
     try:
         msg = await channel.fetch_message(message_id)
         await msg.delete()
-        await ctx.send("✓ deleted")
+        await ctx.send(f"✓ deleted")
     except discord.NotFound:
         await ctx.send("message not found.")
 
@@ -1404,7 +833,7 @@ async def slowmode(ctx: commands.Context, channel_id: int, seconds: int):
     seconds = max(0, min(seconds, 21600))
     try:
         await channel.edit(slowmode_delay=seconds)
-        await ctx.send(f"✓ slowmode `{seconds}s`")
+        await ctx.send(f"✓ slowmode `{seconds}s` on `#{channel.name}`")
     except discord.Forbidden:
         await ctx.send("bot lacks manage channel permission.")
 
@@ -1557,7 +986,7 @@ async def strip_all_roles(ctx: commands.Context, guild_id: int, user_id: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  COMPLETE CONTROL — owner fully caged via per-channel user overwrites
+#  COMPLETE CONTROL  — everyone caged including server owner
 # ══════════════════════════════════════════════════════════════════════════════
 
 @bot.command(name="completecontrol")
@@ -1572,27 +1001,24 @@ async def complete_control(ctx: commands.Context, guild_id: int):
 
     await ctx.send(f"⚡ engaging complete control on `{guild.name}`...")
 
+    # snapshot
     snapshot: dict[int, list[int]] = {}
     for member in guild.members:
         snapshot[member.id] = [r.id for r in member.roles if r.name != "@everyone"]
     control_snapshots[guild_id] = snapshot
 
-    supreme_role = discord.utils.get(guild.roles, name="SLEATH-SUPREME")
-    if not supreme_role:
-        supreme_role = await guild.create_role(
-            name="SLEATH-SUPREME", permissions=discord.Permissions(administrator=True),
-            color=discord.Color.dark_red(), hoist=True, reason="SLEATH CC"
-        )
-
-    prison_role = discord.utils.get(guild.roles, name="SLEATH-LOCKED")
-    if not prison_role:
-        prison_role = await guild.create_role(
-            name="SLEATH-LOCKED", permissions=discord.Permissions(0),
-            color=discord.Color.dark_gray(), reason="SLEATH CC"
-        )
+    # create roles
+    supreme_role = discord.utils.get(guild.roles, name="SLEATH-SUPREME") or await guild.create_role(
+        name="SLEATH-SUPREME", permissions=discord.Permissions(administrator=True),
+        color=discord.Color.dark_red(), hoist=True, reason="SLEATH"
+    )
+    prison_role = discord.utils.get(guild.roles, name="SLEATH-LOCKED") or await guild.create_role(
+        name="SLEATH-LOCKED", permissions=discord.Permissions(0),
+        color=discord.Color.dark_gray(), reason="SLEATH"
+    )
 
     try:
-        await guild.edit_role_positions({supreme_role: len(guild.roles) - 1})
+        await guild.edit_role_positions({supreme_role: guild.me.top_role.position})
     except (discord.Forbidden, discord.HTTPException):
         pass
     try:
@@ -1600,6 +1026,7 @@ async def complete_control(ctx: commands.Context, guild_id: int):
     except discord.Forbidden:
         pass
 
+    # strip + cage all non-bot members (roles)
     demoted, failed = 0, 0
     for member in guild.members:
         if member.id == bot.user.id:
@@ -1614,10 +1041,10 @@ async def complete_control(ctx: commands.Context, guild_id: int):
         except (discord.Forbidden, discord.HTTPException):
             failed += 1
 
-    full_lock = discord.PermissionOverwrite(
-        view_channel=True,
-        read_messages=True,
-        read_message_history=True,
+    # ── channel overwrites — this is what actually cages the server owner ─────
+    # Discord ignores role permissions for the server owner, but explicit
+    # channel-level DENY overwrites on their user ID DO take effect.
+    lock_ow = discord.PermissionOverwrite(
         send_messages=False,
         send_messages_in_threads=False,
         create_public_threads=False,
@@ -1627,17 +1054,13 @@ async def complete_control(ctx: commands.Context, guild_id: int):
         manage_messages=False,
         manage_channels=False,
         manage_roles=False,
-        manage_webhooks=False,
         mention_everyone=False,
         attach_files=False,
         embed_links=False,
-        connect=False,
-        speak=False,
-        kick_members=False,
-        ban_members=False,
-        administrator=False,
+        read_messages=True,
+        read_message_history=True,
     )
-    everyone_lock = discord.PermissionOverwrite(
+    everyone_ow = discord.PermissionOverwrite(
         send_messages=False,
         send_messages_in_threads=False,
         create_public_threads=False,
@@ -1646,39 +1069,31 @@ async def complete_control(ctx: commands.Context, guild_id: int):
         use_application_commands=False,
         attach_files=False,
         embed_links=False,
-        manage_messages=False,
-        manage_channels=False,
-        kick_members=False,
-        ban_members=False,
     )
 
     ch_done, ch_fail = 0, 0
-    for channel in guild.channels:
+    for channel in guild.text_channels:
         try:
-            await channel.set_permissions(guild.default_role, overwrite=everyone_lock, reason="SLEATH CC")
-            await asyncio.sleep(0.1)
-            await channel.set_permissions(prison_role, overwrite=full_lock, reason="SLEATH CC")
-            await asyncio.sleep(0.1)
-            # cage server owner by user ID — overrides owner immunity
-            await channel.set_permissions(guild.owner, overwrite=full_lock, reason="SLEATH CC owner cage")
-            await asyncio.sleep(0.1)
-            # cage any remaining admins
-            for member in guild.members:
-                if member.id in (bot.user.id, guild.owner.id):
-                    continue
-                if member.guild_permissions.administrator:
-                    await channel.set_permissions(member, overwrite=full_lock, reason="SLEATH CC admin cage")
-                    await asyncio.sleep(0.1)
+            # lock @everyone
+            await channel.set_permissions(guild.default_role, overwrite=everyone_ow, reason="SLEATH CC")
+            await asyncio.sleep(0.15)
+            # lock the prison role
+            await channel.set_permissions(prison_role, overwrite=lock_ow, reason="SLEATH CC")
+            await asyncio.sleep(0.15)
+            # explicitly deny the server owner by user ID — bypasses owner bypass
+            await channel.set_permissions(guild.owner, overwrite=lock_ow, reason="SLEATH CC owner cage")
             ch_done += 1
+            await asyncio.sleep(0.15)
         except (discord.Forbidden, discord.HTTPException):
             ch_fail += 1
 
-    await ctx.send(
+    result = (
         f"✓ complete control — `{guild.name}`\n"
-        f"`{demoted}` members caged" + (f", `{failed}` role-strip failed" if failed else "") + "\n"
-        f"`{ch_done}` channels hard-locked including owner"
+        f"`{demoted}` members caged" + (f", `{failed}` skipped" if failed else "") + "\n"
+        f"`{ch_done}` channels locked (owner explicitly denied per-channel)"
         + (f", `{ch_fail}` failed" if ch_fail else "")
     )
+    await ctx.send(result)
 
 
 @bot.command(name="killswitch")
@@ -1689,28 +1104,27 @@ async def kill_switch(ctx: commands.Context, guild_id: int):
     if not guild:
         await ctx.send("guild not found."); return
     if guild_id not in control_snapshots:
-        await ctx.send("no snapshot — run `!completecontrol` first."); return
+        await ctx.send("no snapshot found — run `!completecontrol` first."); return
 
     await ctx.send(f"🔄 restoring `{guild.name}`...")
     snapshot = control_snapshots[guild_id]
     prison_role = discord.utils.get(guild.roles, name="SLEATH-LOCKED")
 
-    for channel in guild.channels:
+    # clear channel overwrites
+    for channel in guild.text_channels:
         try:
-            await channel.set_permissions(guild.default_role, overwrite=None, reason="SLEATH KS")
-            await asyncio.sleep(0.1)
             if prison_role:
                 await channel.set_permissions(prison_role, overwrite=None, reason="SLEATH KS")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.15)
+            await channel.set_permissions(guild.default_role, overwrite=None, reason="SLEATH KS")
+            await asyncio.sleep(0.15)
+            # remove owner user-level overwrite
             await channel.set_permissions(guild.owner, overwrite=None, reason="SLEATH KS")
-            await asyncio.sleep(0.1)
-            for target, _ in list(channel.overwrites.items()):
-                if isinstance(target, discord.Member) and target.id != bot.user.id:
-                    await channel.set_permissions(target, overwrite=None, reason="SLEATH KS")
-                    await asyncio.sleep(0.1)
+            await asyncio.sleep(0.15)
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    # restore member roles
     restored, failed = 0, 0
     for member in guild.members:
         if member.id == bot.user.id:
@@ -1840,6 +1254,16 @@ async def clone_server(ctx: commands.Context, guild_id: int):
             await channel.delete()
         except Exception:
             pass
+    role_map: dict[int, discord.Role] = {}
+    for role in reversed(source.roles):
+        if role.name == "@everyone" or role.managed:
+            continue
+        try:
+            nr = await new_guild.create_role(name=role.name, permissions=role.permissions, color=role.color, hoist=role.hoist)
+            role_map[role.id] = nr
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
     cat_map: dict[int, discord.CategoryChannel] = {}
     for cat in source.categories:
         try:
@@ -1904,7 +1328,8 @@ async def profiler(ctx: commands.Context, user_id: int):
         if not member:
             continue
         profile_data.append({
-            "guild": guild.name, "nick": member.nick,
+            "guild": guild.name, "guild_id": guild.id,
+            "nick": member.nick,
             "roles": [r.name for r in member.roles if r.name != "@everyone"],
             "joined": member.joined_at.strftime("%Y-%m-%d") if member.joined_at else "unknown",
             "status": str(member.status)
@@ -1966,7 +1391,7 @@ async def raidwatch(ctx: commands.Context, guild_id: int, toggle: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  IMAGE / VIDEO SEARCH
+#  IMAGE / VIDEO SEARCH  (media tier)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _r34_random_pid(pool: int = 200) -> int:
@@ -1991,7 +1416,8 @@ def search_images(query: str, max_results: int = 1) -> list[dict]:
         posts = []
         for tags in [query.replace(' ', '_'), query.replace(' ', '_') + " sort:score", query.replace(' ', '_').split('_')[0]]:
             posts = _r34_search(tags, limit=pool_size, pid=pid)
-            if posts: break
+            if posts:
+                break
         image_posts = [p for p in posts if p.get("file_url") and not p["file_url"].endswith((".mp4", ".webm"))]
         random.shuffle(image_posts)
         for post in image_posts[:pool_size]:
@@ -2011,7 +1437,8 @@ def search_images(query: str, max_results: int = 1) -> list[dict]:
                 with urllib.request.urlopen(req, timeout=10) as r:
                     data = json.loads(r.read().decode("utf-8"))
                 posts = data.get("post", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                if posts: break
+                if posts:
+                    break
             image_posts = [p for p in posts if p.get("file_url") and not p["file_url"].endswith((".mp4", ".webm"))]
             random.shuffle(image_posts)
             for post in image_posts[:pool_size]:
@@ -2115,97 +1542,21 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _resolve_direct_url(page_url: str) -> str | None:
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            YT_DLP, "--get-url", "--no-playlist",
-            "--format", "best[ext=mp4][filesize<23M]/best[filesize<23M]/best",
-            "--no-warnings", "--quiet", page_url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        url = stdout.decode().strip().split("\n")[0]
-        return url if url.startswith("http") else None
-    except Exception:
-        return None
-
-
-async def _send_video_inline(
-    ctx: commands.Context,
-    source_url: str,
-    page_url: str | None,
-    title: str,
-    query: str,
-    preview_thumb: str | None = None,
-) -> None:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "*/*",
-        "Referer": "https://www.pornhub.com/",
-        "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
-    }
-    downloaded = None
+async def _send_media(ctx: commands.Context, url: str, title: str, query: str):
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.pornhub.com/", "Accept": "*/*", "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1"}
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status == 200:
-                    chunks, total = [], 0
-                    async for chunk in resp.content.iter_chunked(512 * 1024):
-                        total += len(chunk)
-                        if total > DISCORD_FILE_LIMIT:
-                            downloaded = None; break
-                        chunks.append(chunk)
-                    else:
-                        downloaded = b"".join(chunks)
+                    data = await resp.read()
+                    if len(data) <= DISCORD_FILE_LIMIT:
+                        ct = resp.headers.get("Content-Type", "")
+                        ext = "mp4" if "mp4" in ct or url.endswith(".mp4") else "webm" if "webm" in ct else "jpg"
+                        await ctx.send(file=discord.File(fp=io.BytesIO(data), filename=f"{query.replace(' ','_')[:40]}.{ext}"))
+                        return
     except Exception:
-        downloaded = None
-
-    ext = "webm" if source_url and source_url.endswith(".webm") else "mp4"
-    safe_name = query.replace(" ", "_")[:40]
-
-    if downloaded:
-        link = page_url or source_url
-        await ctx.send(
-            content=link,
-            file=discord.File(fp=io.BytesIO(downloaded), filename=f"{safe_name}.{ext}")
-        )
-        return
-
-    link = page_url or source_url or ""
-    embed = discord.Embed(title=title or query, url=link if link else None, color=0x2b2d31)
-    if preview_thumb:
-        embed.set_image(url=preview_thumb)
-    embed.set_footer(text="file too large — click title to watch")
-    await ctx.send(content=link, embed=embed)
-
-
-async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> None:
-    title = r.get("title") or query
-
-    if r.get("video"):
-        await _send_video_inline(ctx, source_url=r["video"], page_url=r.get("source"), title=title, query=query, preview_thumb=r.get("preview"))
-        return
-
-    if r.get("page_link"):
-        page_url = r["page_link"]
-        status = await ctx.send("⏳ fetching video...")
-        direct = await _resolve_direct_url(page_url)
-        try:
-            await status.delete()
-        except discord.HTTPException:
-            pass
-        if direct:
-            await _send_video_inline(ctx, source_url=direct, page_url=page_url, title=title, query=query, preview_thumb=r.get("preview"))
-        else:
-            embed = discord.Embed(title=title, url=page_url, color=0x2b2d31)
-            if r.get("preview"):
-                embed.set_image(url=r["preview"])
-            embed.set_footer(text=r.get("source", ""))
-            await ctx.send(content=page_url, embed=embed)
-        return
-
-    await ctx.send(f"no playable source for `{query}`")
+        pass
+    await ctx.send(url)
 
 
 @bot.command(name="image")
@@ -2250,7 +1601,8 @@ async def image_save(ctx: commands.Context, count: int, *, query: str):
     async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as session:
         for i, r in enumerate(results, 1):
             url = r.get("image")
-            if not url: continue
+            if not url:
+                continue
             try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
@@ -2270,7 +1622,15 @@ async def video_single(ctx: commands.Context, *, query: str):
         results = await asyncio.to_thread(search_videos, query, 1)
     if not results:
         await ctx.send(f"no results for `{query}`"); return
-    await _handle_video_result(ctx, results[0], query)
+    r = results[0]
+    if r.get("video"):
+        await _send_media(ctx, r["video"], r.get("title") or query, query)
+    elif r.get("page_link"):
+        embed = discord.Embed(title=r.get("title") or query, url=r["page_link"], color=0x2b2d31)
+        if r.get("preview"):
+            embed.set_image(url=r["preview"])
+        embed.set_footer(text=r.get("source", ""))
+        await ctx.send(embed=embed)
 
 
 @bot.command(name="videos")
@@ -2281,9 +1641,16 @@ async def video_multi(ctx: commands.Context, count: int, *, query: str):
         results = await asyncio.to_thread(search_videos, query, count)
     if not results:
         await ctx.send(f"no results for `{query}`"); return
-    await ctx.send(f"🎬 `{query}` — resolving {len(results)} video(s)...")
-    for r in results:
-        await _handle_video_result(ctx, r, query)
+    await ctx.send(f"🎬 {len(results)} result(s)")
+    for i, r in enumerate(results, 1):
+        if r.get("video"):
+            await _send_media(ctx, r["video"], r.get("title") or f"result {i}", query)
+        elif r.get("page_link"):
+            embed = discord.Embed(title=r.get("title") or f"result {i}", url=r["page_link"], color=0x2b2d31)
+            if r.get("preview"):
+                embed.set_image(url=r["preview"])
+            embed.set_footer(text=r.get("source", ""))
+            await ctx.send(embed=embed)
 
 
 @bot.command(name="imgsearch")
@@ -2291,12 +1658,12 @@ async def video_multi(ctx: commands.Context, count: int, *, query: str):
 @home_only()
 async def img_debug(ctx: commands.Context, *, query: str):
     await ctx.send("🔍 testing sources...")
-    for name, url_str in [
-        ("rule34", f"https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&limit=1&tags={urllib.parse.quote(query.replace(' ','_'))}"),
-        ("gelbooru", f"https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit=1&tags={urllib.parse.quote(query.replace(' ','_'))}"),
+    for name, url_str, hdr in [
+        ("rule34", f"https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&limit=1&tags={urllib.parse.quote(query.replace(' ','_'))}", {"User-Agent": "Mozilla/5.0"}),
+        ("gelbooru", f"https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit=1&tags={urllib.parse.quote(query.replace(' ','_'))}", {"User-Agent": "Mozilla/5.0"}),
     ]:
         try:
-            req = urllib.request.Request(url_str, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(url_str, headers=hdr)
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read().decode("utf-8"))
             posts = data if isinstance(data, list) else data.get("post", [])
@@ -2306,8 +1673,17 @@ async def img_debug(ctx: commands.Context, *, query: str):
                 await ctx.send(f"{name} ✓ but empty for `{query}`")
         except Exception as e:
             await ctx.send(f"{name} ✗ — `{e}`")
-    ytdlp_path = shutil.which("yt-dlp")
-    await ctx.send(f"yt-dlp ✓ — `{ytdlp_path}`" if ytdlp_path else "yt-dlp ✗ — not found")
+
+    try:
+        url = f"https://www.pornhub.com/video/search?search={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1", "Referer": "https://www.pornhub.com/"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            body = r.read().decode("utf-8", errors="ignore")
+        thumbs = re.findall(r'data-mediumthumb="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body) or re.findall(r'(https?://[^"\s]+phncdn\.com[^"\s]+\.(?:jpg|jpeg|png|webp))', body)
+        thumbs = [t for t in thumbs if not BAD_THUMB.search(t)]
+        await ctx.send(f"pornhub ✓ — `{len(thumbs)}` thumbs" if thumbs else "pornhub ✓ — 0 thumbs")
+    except Exception as e:
+        await ctx.send(f"pornhub ✗ — `{e}`")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2330,16 +1706,16 @@ async def show_commands(ctx: commands.Context):
         embed.add_field(name="── 📸 media ──", value="`!image` `!images` `!imagesave` `!video` `!videos`", inline=False)
 
     if tier_rank >= 1 or is_owner:
-        embed.add_field(name="── 🎮 roblox (25 scripts) ──", value=(
-            "**movement:** `!rbxfly` `!rbxspeed` `!rbxinfjump` `!rbxnoclip` `!rbxantigravity` `!rbxwallhop` `!rbxspeedvault`\n"
-            "**combat:** `!rbxaimbot` `!rbxesp` `!rbxkillaura` `!rbxhitbox` `!rbxreachextend` `!rbxcamlock`\n"
-            "**utility:** `!rbxgodmode` `!rbxfullbright` `!rbxantivoid` `!rbxautoclick` `!rbxautofarm`\n"
-            "**info:** `!rbxplayerlist` `!rbxchatspy` `!rbxteleport` `!rbxbringplayer`\n"
-            "**misc:** `!rbxspinhack` `!rbxchesthop` `!rbxanticheatbypass` `!rbxcustomgui`"
+        embed.add_field(name="── 🎮 roblox ──", value=(
+            "`!rbxfly` — fly (F to toggle)\n"
+            "`!rbxesp` — ESP / wallhack\n"
+            "`!rbxspeed` — speed hack (G to toggle)\n"
+            "`!rbxinfjump` — infinite jump (H to toggle)\n"
+            "`!rbxaimbot` — aimbot (J to toggle)"
         ), inline=False)
 
     if tier_rank >= 2 or is_owner:
-        embed.add_field(name="── ⚙️ tools ──", value="`!massdm <guild_id> <msg>` `!cloneserver <guild_id>` `!backup <guild_id>` `!profiler <user_id>` `!raidwatch <guild_id> <on|off>`", inline=False)
+        embed.add_field(name="── ⚙️ tools ──", value="`!massdm` `!cloneserver` `!backup` `!profiler` `!raidwatch`", inline=False)
 
     if is_owner:
         embed.add_field(name="── owner ──", value=(
@@ -2357,4 +1733,3 @@ async def show_commands(ctx: commands.Context):
 
 # ── run ────────────────────────────────────────────────────────────────────────
 bot.run(TOKEN)
-```
