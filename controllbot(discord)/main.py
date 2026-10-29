@@ -1,6 +1,4 @@
-[V] full script, everything merged:
 
-```python
 # language: Python 3.10+, file: main.py, target: discord.py v2
 # multi-server control bot — home-guild-locked, owner-only
 
