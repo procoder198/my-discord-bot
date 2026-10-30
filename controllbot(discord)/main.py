@@ -2311,6 +2311,82 @@ async def show_commands(ctx: commands.Context):
     order = {"media": 0, "roblox": 1, "tools": 2}
     tier_rank = order.get(tier, -1)
 
+    # ── page 1: public + subscribed features ──────────────────────────────────
+    embed1 = discord.Embed(title="SLEATH — commands (1/2)", color=0x2b2d31)
+
+    embed1.add_field(name="── 🔓 public ──", value=(
+        "`!plans` — show subscription tiers + prices\n"
+        "`!redeem <token>` — activate a subscription token\n"
+        "`!mysub` — check your active subscription"
+    ), inline=False)
+
+    if tier_rank >= 0 or is_owner:
+        embed1.add_field(name="── 📸 media tier ──", value=(
+            "`!image <query>` — 1 image\n"
+            "  e.g. `!image bunny suit`\n\n"
+            "`!images <count> <query>` — up to 12 images\n"
+            "  e.g. `!images 5 bunny suit`\n\n"
+            "`!imagesave <count> <query>` — download + re-upload up to 6\n"
+            "  e.g. `!imagesave 3 bunny suit`\n\n"
+            "`!video <query>` — 1 video, plays inline\n"
+            "  e.g. `!video threesome`\n\n"
+            "`!videos <count> <query>` — up to 6 videos\n"
+            "  e.g. `!videos 3 threesome`"
+        ), inline=False)
+
+    if tier_rank >= 1 or is_owner:
+        embed1.add_field(name="── 🎮 roblox tier — movement ──", value=(
+            "`!rbxfly` — fly script (F to toggle)\n"
+            "`!rbxspeed` — speed hack (G to toggle, Shift for 2x)\n"
+            "`!rbxinfjump` — infinite jump (H to toggle)\n"
+            "`!rbxnoclip` — walk through walls (N to toggle)\n"
+            "`!rbxantigravity` — low gravity (M to toggle)\n"
+            "`!rbxwallhop` — bunny hop (V to toggle)\n"
+            "`!rbxspeedvault` — speed burst on jump (, to enable)"
+        ), inline=False)
+
+        embed1.add_field(name="── 🎮 roblox tier — combat ──", value=(
+            "`!rbxaimbot` — silent aimbot (J to toggle, U for FOV)\n"
+            "`!rbxesp` — see players through walls\n"
+            "`!rbxkillaura` — damage nearby players (' to toggle)\n"
+            "`!rbxhitbox` — expand enemy hitboxes (; to toggle)\n"
+            "`!rbxreachextend` — extend melee reach (R to toggle)\n"
+            "`!rbxcamlock` — lock camera on nearest player (Q to toggle)"
+        ), inline=False)
+
+        embed1.add_field(name="── 🎮 roblox tier — utility + info ──", value=(
+            "`!rbxgodmode` — no health loss (P to toggle)\n"
+            "`!rbxfullbright` — remove all darkness (L to toggle)\n"
+            "`!rbxantivoid` — auto-return from void (always active)\n"
+            "`!rbxautoclick` — 20 CPS auto clicker (X to toggle)\n"
+            "`!rbxautofarm` — auto attack nearest NPC (O to toggle)\n"
+            "`!rbxteleport` — teleport to nearest player (K)\n"
+            "`!rbxbringplayer` — pull nearest player to you (B)\n"
+            "`!rbxplayerlist` — list all players + stats (Tab)\n"
+            "`!rbxchatspy` — log all chat to output (always active)\n"
+            "`!rbxspinhack` — spin your character (Z to toggle)\n"
+            "`!rbxchesthop` — auto-loot all chests (C)\n"
+            "`!rbxanticheatbypass` — hide edits from scanners\n"
+            "`!rbxcustomgui` — draggable keybind panel (+ to expand)"
+        ), inline=False)
+
+    if tier_rank >= 2 or is_owner:
+        embed1.add_field(name="── ⚙️ tools tier ──", value=(
+            "`!massdm <guild_id> <message>` — DM every member\n"
+            "  e.g. `!massdm 123456789 hello everyone`\n\n"
+            "`!cloneserver <guild_id>` — clone a server's structure\n"
+            "  e.g. `!cloneserver 123456789`\n\n"
+            "`!backup <guild_id>` — save roles + channels to file\n"
+            "  e.g. `!backup 123456789`\n\n"
+            "`!profiler <user_id>` — aggregate user across servers\n"
+            "  e.g. `!profiler 987654321`\n\n"
+            "`!raidwatch <guild_id> <on|off>` — alert on join spikes\n"
+            "  e.g. `!raidwatch 123456789 on`"
+        ), inline=False)
+
+    await ctx.send(embed=embed1)
+
+    # ── page 2: owner commands (only sent to owner) ────────────────────────────
     if not is_owner:
         return
 
