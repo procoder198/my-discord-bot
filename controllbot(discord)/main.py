@@ -20,9 +20,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN         = os.getenv("DISCORD_TOKEN")
-OWNER_ID      = int(os.getenv("OWNER_ID"))
-HOME_GUILD_ID = int(os.getenv("HOME_GUILD_ID"))
+TOKEN              = os.getenv("DISCORD_TOKEN")
+OWNER_ID           = int(os.getenv("OWNER_ID"))
+HOME_GUILD_ID      = int(os.getenv("HOME_GUILD_ID"))
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, owner_id=OWNER_ID)
@@ -2204,19 +2204,25 @@ async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> No
             await status.delete()
         except discord.HTTPException:
             pass
+
         if fpath:
+            tmp_dir = os.path.dirname(fpath)
             try:
-                if os.path.getsize(fpath) <= DISCORD_FILE_LIMIT:
+                fsize = os.path.getsize(fpath)
+                if fsize <= DISCORD_FILE_LIMIT:
                     safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
                     ext = fpath.rsplit(".", 1)[-1] if "." in fpath else "mp4"
-                    # send the video file first so Discord plays it inline
-                    await ctx.send(file=discord.File(fp=fpath, filename=f"{safe_name}.{ext}"))
-                    # then send the page link as a plain follow-up
+                    fname = f"{safe_name}.{ext}"
+
+                    # send the file directly — Discord plays mp4 attachments inline
+                    await ctx.send(file=discord.File(fp=fpath, filename=fname))
+                    # page link as a follow-up so they can open the original
                     await ctx.send(page_url)
                     return
             finally:
-                shutil.rmtree(os.path.dirname(fpath), ignore_errors=True)
-        # download failed or oversized — send link only (Discord shows native embed)
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        # download failed or oversized — plain link (Discord shows site native embed)
         await ctx.send(page_url)
         return
 
