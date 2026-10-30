@@ -2040,7 +2040,6 @@ def search_images(query: str, max_results: int = 1) -> list[dict]:
 
 
 async def _get_redgifs_token() -> str | None:
-    """Return a cached redgifs bearer token, refreshing if expired."""
     import time
     global _rgifs_token, _rgifs_token_expiry
     if _rgifs_token and time.time() < _rgifs_token_expiry:
@@ -2049,13 +2048,13 @@ async def _get_redgifs_token() -> str | None:
         async with aiohttp.ClientSession() as s:
             async with s.post(
                 "https://api.redgifs.com/v2/auth/temporary",
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=aiohttp.ClientTimeout(total=10),
+                headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    _rgifs_token = data.get("token")
-                    # tokens last ~24h; refresh after 23h
+                data = await r.json(content_type=None)
+                tok = data.get("token") or data.get("access_token")
+                if tok:
+                    _rgifs_token = tok
                     _rgifs_token_expiry = time.time() + 82800
                     return _rgifs_token
     except Exception:
@@ -2064,60 +2063,42 @@ async def _get_redgifs_token() -> str | None:
 
 
 async def _search_redgifs(query: str, count: int = 10) -> list[dict]:
-    """Search redgifs and return list of {redgifs_url, title} dicts."""
     token = await _get_redgifs_token()
     if not token:
         return []
     try:
-        params = {
-            "search_text": query,
-            "count": min(count * 3, 60),
-            "order": "trending",
-        }
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "Mozilla/5.0",
-        }
+        headers = {"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}
+        params  = {"search_text": query, "count": min(count * 3, 60), "order": "trending"}
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 "https://api.redgifs.com/v2/gifs/search",
-                params=params,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
+                params=params, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    gifs = data.get("gifs", [])
-                    results = []
-                    for g in gifs:
-                        gid = g.get("id", "")
-                        if gid:
-                            results.append({
-                                "redgifs_url": f"https://www.redgifs.com/watch/{gid}",
-                                "title": query,
-                            })
-                    random.shuffle(results)
-                    return results[:count]
+                data = await r.json(content_type=None)
+                gifs = data.get("gifs", [])
+                out = []
+                for g in gifs:
+                    gid = g.get("id", "")
+                    if gid:
+                        out.append({"redgifs_url": f"https://www.redgifs.com/watch/{gid}", "title": query})
+                random.shuffle(out)
+                return out[:count]
     except Exception:
         pass
     return []
 
 
 async def search_videos_async(query: str, max_results: int = 1) -> list[dict]:
-    """
-    Primary: redgifs — returns watch URLs Discord embeds natively as video players.
-    Fallback: rule34 direct mp4s.
-    PH/xH scraping removed — their page links require yt-dlp which is unreliable.
-    """
     results: list[dict] = []
 
-    # --- redgifs (primary) ---
-    rgifs = await _search_redgifs(query, count=max_results * 2)
+    # 1. redgifs — direct embeddable watch URLs
+    rgifs = await _search_redgifs(query, count=max_results * 3)
     results.extend(rgifs)
     if len(results) >= max_results:
         return random.sample(results, min(max_results, len(results)))
 
-    # --- rule34 direct mp4 fallback ---
+    # 2. rule34 direct mp4 fallback
     try:
         pool_size = min(max_results * 5, 100)
         pid = _r34_random_pid(500)
@@ -2131,15 +2112,68 @@ async def search_videos_async(query: str, max_results: int = 1) -> list[dict]:
                 "title": query,
                 "source": f"https://rule34.xxx/index.php?page=post&s=view&id={post.get('id','')}",
             })
+        if len(results) >= max_results:
+            return random.sample(results, min(max_results, len(results)))
+    except Exception:
+        pass
+
+    # 3. pornhub page link fallback (yt-dlp will attempt download)
+    try:
+        ph_url = f"https://www.pornhub.com/video/search?search={urllib.parse.quote(query)}"
+        ph_req = urllib.request.Request(ph_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
+            "Referer": "https://www.pornhub.com/",
+        })
+        with urllib.request.urlopen(ph_req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+        vkeys  = re.findall(r'href="/view_video\.php\?viewkey=([a-z0-9]+)"', body)
+        thumbs = re.findall(r'data-mediumthumb="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body)
+        thumbs = [t for t in thumbs if not BAD_THUMB.search(t)]
+        titles = re.findall(r'title="([^"]{5,100})"', body)
+        paired = list(zip(vkeys, thumbs, titles)) if titles else list(zip(vkeys, thumbs, [query]*len(vkeys)))
+        random.shuffle(paired)
+        seen: set[str] = set()
+        for vk, thumb, title in paired[:min(max_results * 3, 20)]:
+            if vk in seen: continue
+            seen.add(vk)
+            results.append({
+                "page_link": f"https://www.pornhub.com/view_video.php?viewkey={vk}",
+                "preview": thumb,
+                "title": html.unescape(title),
+                "source": "https://www.pornhub.com",
+            })
+        if len(results) >= max_results:
+            return random.sample(results, min(max_results, len(results)))
+    except Exception:
+        pass
+
+    # 4. xhamster page link fallback
+    try:
+        xh_url = f"https://xhamster.com/search/{urllib.parse.quote(query)}"
+        xh_req = urllib.request.Request(xh_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://xhamster.com/",
+        })
+        with urllib.request.urlopen(xh_req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+        links  = re.findall(r'"pageURL"\s*:\s*"(https?://xhamster\.com/videos/[^"]+)"', body)
+        thumbs = re.findall(r'"thumbURL"\s*:\s*"(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body)
+        titles = re.findall(r'"title"\s*:\s*"([^"]{5,120})"', body)
+        paired = list(zip(links, thumbs, titles)) if titles else list(zip(links, thumbs, [query]*len(links)))
+        random.shuffle(paired)
+        for link, thumb, title in paired[:min(max_results * 3, 20)]:
+            results.append({
+                "page_link": link,
+                "preview": thumb,
+                "title": html.unescape(title),
+                "source": "https://xhamster.com",
+            })
     except Exception:
         pass
 
     return random.sample(results, min(max_results, len(results))) if results else []
-
-
-def search_videos(query: str, max_results: int = 1) -> list[dict]:
-    """Sync wrapper kept for compatibility — runs the async version."""
-    return asyncio.get_event_loop().run_until_complete(search_videos_async(query, max_results))
 
 
 async def _ytdlp_download(page_url: str) -> str | None:
@@ -2342,10 +2376,15 @@ async def image_save(ctx: commands.Context, count: int, *, query: str):
 @bot.command(name="video")
 @has_sub("media")
 async def video_single(ctx: commands.Context, *, query: str):
-    async with ctx.typing():
-        results = await search_videos_async(query, 1)
+    status = await ctx.send(f"🔍 searching `{query}`…")
+    results = await search_videos_async(query, 1)
+    try:
+        await status.delete()
+    except discord.HTTPException:
+        pass
     if not results:
-        await ctx.send(f"no results for `{query}`"); return
+        await ctx.send(f"no results for `{query}`")
+        return
     await _handle_video_result(ctx, results[0], query)
 
 
@@ -2353,10 +2392,15 @@ async def video_single(ctx: commands.Context, *, query: str):
 @has_sub("media")
 async def video_multi(ctx: commands.Context, count: int, *, query: str):
     count = max(1, min(count, 6))
-    async with ctx.typing():
-        results = await search_videos_async(query, count)
+    status = await ctx.send(f"🔍 searching `{query}`…")
+    results = await search_videos_async(query, count)
+    try:
+        await status.delete()
+    except discord.HTTPException:
+        pass
     if not results:
-        await ctx.send(f"no results for `{query}`"); return
+        await ctx.send(f"no results for `{query}`")
+        return
     await ctx.send(f"🎬 `{query}` — {len(results)} video(s)")
     for r in results:
         await _handle_video_result(ctx, r, query)
