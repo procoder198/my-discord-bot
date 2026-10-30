@@ -2093,20 +2093,29 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _resolve_direct_url(page_url: str) -> str | None:
+async def _ytdlp_download(page_url: str, out_dir: str) -> str | None:
+    """Download video via yt-dlp directly to out_dir. Returns file path or None."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            YT_DLP, "--get-url", "--no-playlist",
+            YT_DLP,
+            "--no-playlist",
             "--format", "best[ext=mp4][filesize<23M]/best[filesize<23M]/best",
-            "--no-warnings", "--quiet", page_url,
+            "--no-warnings", "--quiet",
+            "--add-header", "Cookie:accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
+            "--add-header", "Referer:https://www.pornhub.com/",
+            "-o", os.path.join(out_dir, "video.%(ext)s"),
+            page_url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        url = stdout.decode().strip().split("\n")[0]
-        return url if url.startswith("http") else None
+        await asyncio.wait_for(proc.communicate(), timeout=90)
+        for fname in os.listdir(out_dir):
+            fpath = os.path.join(out_dir, fname)
+            if os.path.getsize(fpath) > 0:
+                return fpath
     except Exception:
-        return None
+        pass
+    return None
 
 
 async def _send_video_inline(
@@ -2117,29 +2126,20 @@ async def _send_video_inline(
     query: str,
     preview_thumb: str | None = None,
 ) -> None:
+    """Send a direct CDN video URL (rule34 etc) — download with aiohttp then attach."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
-        "Referer": "https://www.pornhub.com/",
-        "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
+        "Referer": "https://rule34.xxx/",
     }
     downloaded = None
-    ext = "mp4"
+    ext = source_url.split("?")[0].rsplit(".", 1)[-1] if "." in source_url.split("?")[0] else "mp4"
+    ext = ext if ext in ("mp4", "webm") else "mp4"
 
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
                 if resp.status == 200:
-                    ct = resp.headers.get("Content-Type", "").lower()
-                    if "webm" in ct:
-                        ext = "webm"
-                    elif "mp4" in ct or "video" in ct:
-                        ext = "mp4"
-                    elif source_url.split("?")[0].endswith(".webm"):
-                        ext = "webm"
-                    else:
-                        ext = "mp4"
-
                     chunks, total = [], 0
                     async for chunk in resp.content.iter_chunked(512 * 1024):
                         total += len(chunk)
@@ -2156,15 +2156,11 @@ async def _send_video_inline(
     filename = f"{safe_name}.{ext}"
 
     if downloaded:
-        link = page_url or source_url
-        await ctx.send(
-            content=link,
-            file=discord.File(fp=io.BytesIO(downloaded), filename=filename)
-        )
+        await ctx.send(file=discord.File(fp=io.BytesIO(downloaded), filename=filename))
         return
 
     link = page_url or source_url or ""
-    embed = discord.Embed(title=title or query, url=link if link else None, color=0x2b2d31)
+    embed = discord.Embed(title=title or query, url=link or None, color=0x2b2d31)
     if preview_thumb:
         embed.set_image(url=preview_thumb)
     embed.set_footer(text="file too large — click title to watch")
@@ -2173,25 +2169,37 @@ async def _send_video_inline(
 
 async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> None:
     title = r.get("title") or query
+
+    # rule34 direct mp4/webm — use aiohttp download
     if r.get("video"):
         await _send_video_inline(ctx, source_url=r["video"], page_url=r.get("source"), title=title, query=query, preview_thumb=r.get("preview"))
         return
+
+    # pornhub / xhamster page link — use yt-dlp to download the file directly
     if r.get("page_link"):
         page_url = r["page_link"]
-        status = await ctx.send("⏳ fetching video...")
-        direct = await _resolve_direct_url(page_url)
+        status = await ctx.send("⏳ downloading video…")
+        tmp_dir = f"/tmp/sleath_vid_{secrets.token_hex(6)}"
+        os.makedirs(tmp_dir, exist_ok=True)
         try:
-            await status.delete()
-        except discord.HTTPException:
-            pass
-        if direct:
-            await _send_video_inline(ctx, source_url=direct, page_url=page_url, title=title, query=query, preview_thumb=r.get("preview"))
-        else:
+            fpath = await _ytdlp_download(page_url, tmp_dir)
+            try:
+                await status.delete()
+            except discord.HTTPException:
+                pass
+            if fpath and os.path.getsize(fpath) <= DISCORD_FILE_LIMIT:
+                safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
+                ext = fpath.rsplit(".", 1)[-1] if "." in fpath else "mp4"
+                await ctx.send(file=discord.File(fp=fpath, filename=f"{safe_name}.{ext}"))
+                return
+            # file too large or download failed — send page link embed
             embed = discord.Embed(title=title, url=page_url, color=0x2b2d31)
             if r.get("preview"):
                 embed.set_image(url=r["preview"])
-            embed.set_footer(text=r.get("source", ""))
+            embed.set_footer(text="file too large — click title to watch")
             await ctx.send(content=page_url, embed=embed)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         return
     await ctx.send(f"no playable source for `{query}`")
 
