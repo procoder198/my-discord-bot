@@ -2093,20 +2093,32 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _resolve_direct_url(page_url: str) -> str | None:
+async def _ytdlp_download(page_url: str) -> str | None:
+    """Download video to a temp file via yt-dlp. Returns file path or None."""
+    tmp_dir = f"/tmp/sleath_{secrets.token_hex(6)}"
+    os.makedirs(tmp_dir, exist_ok=True)
     try:
         proc = await asyncio.create_subprocess_exec(
-            YT_DLP, "--get-url", "--no-playlist",
+            YT_DLP,
+            "--no-playlist",
             "--format", "best[ext=mp4][filesize<23M]/best[filesize<23M]/best",
-            "--no-warnings", "--quiet", page_url,
+            "--no-warnings", "--quiet",
+            "--add-header", "Cookie:accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
+            "--add-header", "Referer:https://www.pornhub.com/",
+            "-o", os.path.join(tmp_dir, "video.%(ext)s"),
+            page_url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        url = stdout.decode().strip().split("\n")[0]
-        return url if url.startswith("http") else None
+        await asyncio.wait_for(proc.communicate(), timeout=120)
+        for fname in os.listdir(tmp_dir):
+            fpath = os.path.join(tmp_dir, fname)
+            if os.path.getsize(fpath) > 0:
+                return fpath
     except Exception:
-        return None
+        pass
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    return None
 
 
 async def _send_video_inline(
@@ -2186,21 +2198,26 @@ async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> No
 
     if r.get("page_link"):
         page_url = r["page_link"]
-        status = await ctx.send("⏳ fetching video...")
-        direct = await _resolve_direct_url(page_url)
+        status = await ctx.send("⏳ downloading video…")
+        fpath = await _ytdlp_download(page_url)
         try:
             await status.delete()
         except discord.HTTPException:
             pass
-        if direct:
-            await _send_video_inline(
-                ctx, source_url=direct, page_url=page_url,
-                title=title, query=query, preview_thumb=r.get("preview")
-            )
-        else:
-            # yt-dlp couldn't resolve — send page link as plain text
-            # Discord will show the site's native embed with play button
-            await ctx.send(page_url)
+        if fpath:
+            try:
+                if os.path.getsize(fpath) <= DISCORD_FILE_LIMIT:
+                    safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
+                    ext = fpath.rsplit(".", 1)[-1] if "." in fpath else "mp4"
+                    # send the video file first so Discord plays it inline
+                    await ctx.send(file=discord.File(fp=fpath, filename=f"{safe_name}.{ext}"))
+                    # then send the page link as a plain follow-up
+                    await ctx.send(page_url)
+                    return
+            finally:
+                shutil.rmtree(os.path.dirname(fpath), ignore_errors=True)
+        # download failed or oversized — send link only (Discord shows native embed)
+        await ctx.send(page_url)
         return
 
     await ctx.send(f"no playable source for `{query}`")
