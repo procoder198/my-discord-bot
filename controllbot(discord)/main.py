@@ -20,9 +20,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN              = os.getenv("DISCORD_TOKEN")
-OWNER_ID           = int(os.getenv("OWNER_ID"))
-HOME_GUILD_ID      = int(os.getenv("HOME_GUILD_ID"))
+TOKEN         = os.getenv("DISCORD_TOKEN")
+OWNER_ID      = int(os.getenv("OWNER_ID"))
+HOME_GUILD_ID = int(os.getenv("HOME_GUILD_ID"))
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, owner_id=OWNER_ID)
@@ -34,10 +34,6 @@ pending_tokens: dict[str, dict] = {}
 DISCORD_FILE_LIMIT = 24 * 1024 * 1024
 BAD_THUMB = re.compile(r'(\/xx\/|_recording|\/track\/|1x1|placeholder)', re.I)
 YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
-
-# redgifs token cache — refreshed automatically on expiry
-_rgifs_token: str | None = None
-_rgifs_token_expiry: float = 0.0
 
 ROBLOX_SCRIPTS = {
 
@@ -2039,169 +2035,78 @@ def search_images(query: str, max_results: int = 1) -> list[dict]:
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _get_redgifs_token() -> str | None:
-    import time
-    global _rgifs_token, _rgifs_token_expiry
-    if _rgifs_token and time.time() < _rgifs_token_expiry:
-        return _rgifs_token
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                "https://api.redgifs.com/v2/auth/temporary",
-                headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as r:
-                data = await r.json(content_type=None)
-                tok = data.get("token") or data.get("access_token")
-                if tok:
-                    _rgifs_token = tok
-                    _rgifs_token_expiry = time.time() + 82800
-                    return _rgifs_token
-    except Exception:
-        pass
-    return None
-
-
-async def _search_redgifs(query: str, count: int = 10) -> list[dict]:
-    token = await _get_redgifs_token()
-    if not token:
-        return []
-    try:
-        headers = {"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}
-        params  = {"search_text": query, "count": min(count * 3, 60), "order": "trending"}
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
-                "https://api.redgifs.com/v2/gifs/search",
-                params=params, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as r:
-                data = await r.json(content_type=None)
-                gifs = data.get("gifs", [])
-                out = []
-                for g in gifs:
-                    gid = g.get("id", "")
-                    if gid:
-                        out.append({"redgifs_url": f"https://www.redgifs.com/watch/{gid}", "title": query})
-                random.shuffle(out)
-                return out[:count]
-    except Exception:
-        pass
-    return []
-
-
-async def search_videos_async(query: str, max_results: int = 1) -> list[dict]:
+def search_videos(query: str, max_results: int = 1) -> list[dict]:
+    pool_size = min(max_results * 5, 100)
     results: list[dict] = []
 
-    # 1. redgifs — direct embeddable watch URLs
-    rgifs = await _search_redgifs(query, count=max_results * 3)
-    results.extend(rgifs)
-    if len(results) >= max_results:
-        return random.sample(results, min(max_results, len(results)))
-
-    # 2. rule34 direct mp4 fallback
     try:
-        pool_size = min(max_results * 5, 100)
         pid = _r34_random_pid(500)
-        posts = await asyncio.to_thread(_r34_search, query.replace(' ', '_'), pool_size, pid)
+        posts = _r34_search(query.replace(' ', '_'), limit=pool_size, pid=pid)
         video_posts = [p for p in posts if p.get("file_url") and p["file_url"].endswith((".mp4", ".webm"))]
         random.shuffle(video_posts)
         for post in video_posts[:pool_size]:
-            results.append({
-                "video": post["file_url"],
-                "preview": post.get("preview_url"),
-                "title": query,
-                "source": f"https://rule34.xxx/index.php?page=post&s=view&id={post.get('id','')}",
-            })
+            results.append({"video": post["file_url"], "preview": post.get("preview_url"), "title": query, "source": f"https://rule34.xxx/index.php?page=post&s=view&id={post.get('id','')}"})
         if len(results) >= max_results:
             return random.sample(results, min(max_results, len(results)))
     except Exception:
         pass
 
-    # 3. pornhub page link fallback (yt-dlp will attempt download)
-    try:
-        ph_url = f"https://www.pornhub.com/video/search?search={urllib.parse.quote(query)}"
-        ph_req = urllib.request.Request(ph_url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
-            "Referer": "https://www.pornhub.com/",
-        })
-        with urllib.request.urlopen(ph_req, timeout=15) as resp:
-            body = resp.read().decode("utf-8", errors="ignore")
-        vkeys  = re.findall(r'href="/view_video\.php\?viewkey=([a-z0-9]+)"', body)
-        thumbs = re.findall(r'data-mediumthumb="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body)
-        thumbs = [t for t in thumbs if not BAD_THUMB.search(t)]
-        titles = re.findall(r'title="([^"]{5,100})"', body)
-        paired = list(zip(vkeys, thumbs, titles)) if titles else list(zip(vkeys, thumbs, [query]*len(vkeys)))
-        random.shuffle(paired)
-        seen: set[str] = set()
-        for vk, thumb, title in paired[:min(max_results * 3, 20)]:
-            if vk in seen: continue
-            seen.add(vk)
-            results.append({
-                "page_link": f"https://www.pornhub.com/view_video.php?viewkey={vk}",
-                "preview": thumb,
-                "title": html.unescape(title),
-                "source": "https://www.pornhub.com",
-            })
-        if len(results) >= max_results:
-            return random.sample(results, min(max_results, len(results)))
-    except Exception:
-        pass
+    if len(results) < max_results:
+        try:
+            url = f"https://www.pornhub.com/video/search?search={urllib.parse.quote(query)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1", "Referer": "https://www.pornhub.com/"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                body = r.read().decode("utf-8", errors="ignore")
+            vkeys = re.findall(r'href="/view_video\.php\?viewkey=([a-z0-9]+)"', body)
+            thumbs = re.findall(r'data-mediumthumb="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body) or re.findall(r'(https?://[^"\s]+phncdn\.com[^"\s]+\.(?:jpg|jpeg|png|webp))', body)
+            thumbs = [t for t in thumbs if not BAD_THUMB.search(t)]
+            titles = re.findall(r'title="([^"]{5,100})"', body)
+            paired = list(zip(vkeys, thumbs, titles)) if titles else list(zip(vkeys, thumbs, [query]*len(vkeys)))
+            random.shuffle(paired)
+            seen: set[str] = set()
+            for vk, thumb, title in paired[:pool_size]:
+                if vk in seen: continue
+                seen.add(vk)
+                results.append({"video": None, "page_link": f"https://www.pornhub.com/view_video.php?viewkey={vk}", "preview": thumb, "title": html.unescape(title), "source": "https://www.pornhub.com"})
+        except Exception:
+            pass
 
-    # 4. xhamster page link fallback
-    try:
-        xh_url = f"https://xhamster.com/search/{urllib.parse.quote(query)}"
-        xh_req = urllib.request.Request(xh_url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://xhamster.com/",
-        })
-        with urllib.request.urlopen(xh_req, timeout=15) as resp:
-            body = resp.read().decode("utf-8", errors="ignore")
-        links  = re.findall(r'"pageURL"\s*:\s*"(https?://xhamster\.com/videos/[^"]+)"', body)
-        thumbs = re.findall(r'"thumbURL"\s*:\s*"(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body)
-        titles = re.findall(r'"title"\s*:\s*"([^"]{5,120})"', body)
-        paired = list(zip(links, thumbs, titles)) if titles else list(zip(links, thumbs, [query]*len(links)))
-        random.shuffle(paired)
-        for link, thumb, title in paired[:min(max_results * 3, 20)]:
-            results.append({
-                "page_link": link,
-                "preview": thumb,
-                "title": html.unescape(title),
-                "source": "https://xhamster.com",
-            })
-    except Exception:
-        pass
+    if len(results) >= max_results:
+        return random.sample(results, min(max_results, len(results)))
+
+    if len(results) < max_results:
+        try:
+            url = f"https://xhamster.com/search/{urllib.parse.quote(query)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "en-US,en;q=0.9", "Referer": "https://xhamster.com/"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                body = r.read().decode("utf-8", errors="ignore")
+            links = re.findall(r'"pageURL"\s*:\s*"(https?://xhamster\.com/videos/[^"]+)"', body)
+            thumbs = re.findall(r'"thumbURL"\s*:\s*"(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body) or re.findall(r'src="(https?://[^"]+xhcdn\.com[^"]+\.(?:jpg|jpeg|png|webp))"', body)
+            titles = re.findall(r'"title"\s*:\s*"([^"]{5,120})"', body)
+            paired = list(zip(links, thumbs, titles)) if titles else list(zip(links, thumbs, [query]*len(links)))
+            random.shuffle(paired)
+            for link, thumb, title in paired[:pool_size]:
+                results.append({"video": None, "page_link": link, "preview": thumb, "title": html.unescape(title), "source": "https://xhamster.com"})
+        except Exception:
+            pass
 
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _ytdlp_download(page_url: str) -> str | None:
-    """Download video to a temp file via yt-dlp. Returns file path or None."""
-    tmp_dir = f"/tmp/sleath_{secrets.token_hex(6)}"
-    os.makedirs(tmp_dir, exist_ok=True)
+async def _resolve_direct_url(page_url: str) -> str | None:
     try:
         proc = await asyncio.create_subprocess_exec(
-            YT_DLP,
-            "--no-playlist",
+            YT_DLP, "--get-url", "--no-playlist",
             "--format", "best[ext=mp4][filesize<23M]/best[filesize<23M]/best",
-            "--no-warnings", "--quiet",
-            "--add-header", "Cookie:accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
-            "--add-header", "Referer:https://www.pornhub.com/",
-            "-o", os.path.join(tmp_dir, "video.%(ext)s"),
-            page_url,
+            "--no-warnings", "--quiet", page_url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.wait_for(proc.communicate(), timeout=120)
-        for fname in os.listdir(tmp_dir):
-            fpath = os.path.join(tmp_dir, fname)
-            if os.path.getsize(fpath) > 0:
-                return fpath
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        url = stdout.decode().strip().split("\n")[0]
+        return url if url.startswith("http") else None
     except Exception:
-        pass
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    return None
+        return None
 
 
 async def _send_video_inline(
@@ -2272,12 +2177,6 @@ async def _send_video_inline(
 async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> None:
     title = r.get("title") or query
 
-    # redgifs watch URL — Discord embeds it natively as an inline video player
-    if r.get("redgifs_url"):
-        await ctx.send(r["redgifs_url"])
-        return
-
-    # rule34 direct mp4/webm — download and attach
     if r.get("video"):
         await _send_video_inline(
             ctx, source_url=r["video"], page_url=r.get("source"),
@@ -2287,32 +2186,21 @@ async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> No
 
     if r.get("page_link"):
         page_url = r["page_link"]
-        status = await ctx.send("⏳ downloading video…")
-        fpath = await _ytdlp_download(page_url)
+        status = await ctx.send("⏳ fetching video...")
+        direct = await _resolve_direct_url(page_url)
         try:
             await status.delete()
         except discord.HTTPException:
             pass
-
-        if fpath:
-            tmp_dir = os.path.dirname(fpath)
-            try:
-                fsize = os.path.getsize(fpath)
-                if fsize <= DISCORD_FILE_LIMIT:
-                    safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
-                    ext = fpath.rsplit(".", 1)[-1] if "." in fpath else "mp4"
-                    fname = f"{safe_name}.{ext}"
-
-                    # send the file directly — Discord plays mp4 attachments inline
-                    await ctx.send(file=discord.File(fp=fpath, filename=fname))
-                    # page link as a follow-up so they can open the original
-                    await ctx.send(page_url)
-                    return
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        # download failed or oversized — plain link (Discord shows site native embed)
-        await ctx.send(page_url)
+        if direct:
+            await _send_video_inline(
+                ctx, source_url=direct, page_url=page_url,
+                title=title, query=query, preview_thumb=r.get("preview")
+            )
+        else:
+            # yt-dlp couldn't resolve — send page link as plain text
+            # Discord will show the site's native embed with play button
+            await ctx.send(page_url)
         return
 
     await ctx.send(f"no playable source for `{query}`")
@@ -2376,15 +2264,10 @@ async def image_save(ctx: commands.Context, count: int, *, query: str):
 @bot.command(name="video")
 @has_sub("media")
 async def video_single(ctx: commands.Context, *, query: str):
-    status = await ctx.send(f"🔍 searching `{query}`…")
-    results = await search_videos_async(query, 1)
-    try:
-        await status.delete()
-    except discord.HTTPException:
-        pass
+    async with ctx.typing():
+        results = await asyncio.to_thread(search_videos, query, 1)
     if not results:
-        await ctx.send(f"no results for `{query}`")
-        return
+        await ctx.send(f"no results for `{query}`"); return
     await _handle_video_result(ctx, results[0], query)
 
 
@@ -2392,16 +2275,11 @@ async def video_single(ctx: commands.Context, *, query: str):
 @has_sub("media")
 async def video_multi(ctx: commands.Context, count: int, *, query: str):
     count = max(1, min(count, 6))
-    status = await ctx.send(f"🔍 searching `{query}`…")
-    results = await search_videos_async(query, count)
-    try:
-        await status.delete()
-    except discord.HTTPException:
-        pass
+    async with ctx.typing():
+        results = await asyncio.to_thread(search_videos, query, count)
     if not results:
-        await ctx.send(f"no results for `{query}`")
-        return
-    await ctx.send(f"🎬 `{query}` — {len(results)} video(s)")
+        await ctx.send(f"no results for `{query}`"); return
+    await ctx.send(f"🎬 `{query}` — resolving {len(results)} video(s)...")
     for r in results:
         await _handle_video_result(ctx, r, query)
 
