@@ -969,6 +969,25 @@ def has_sub(tier: str):
     return commands.check(predicate)
 
 
+def _parse_duration(duration_str: str) -> timedelta | None:
+    """
+    Parse duration strings like: 30m, 2h, 1d, 90m, 48h, 7d
+    Returns timedelta or None if invalid.
+    """
+    m = re.fullmatch(r'(\d+)(m|h|d)', duration_str.strip().lower())
+    if not m:
+        return None
+    value = int(m.group(1))
+    unit = m.group(2)
+    if unit == 'm':
+        return timedelta(minutes=value)
+    elif unit == 'h':
+        return timedelta(hours=value)
+    elif unit == 'd':
+        return timedelta(days=value)
+    return None
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -1064,21 +1083,45 @@ async def show_plans(ctx: commands.Context):
     embed = discord.Embed(title="SLEATH — subscription tiers", color=0x2b2d31)
     embed.add_field(name="📸 Media — £5/week", value="`!image` `!images` `!imagesave` `!video` `!videos`\nAdult image + video search", inline=False)
     embed.add_field(name="🎮 Roblox — £7/week", value="25 Lua scripts for KRNL executor\n`!rbxfly` `!rbxesp` `!rbxspeed` and 22 more", inline=False)
-    embed.add_field(name="⚙️ Tools — £10/week", value="`!massdm` `!cloneserver` `!backup` `!profiler` `!raidwatch`\nAll tiers included", inline=False)
+    embed.add_field(name="⚙️ Tools — £10/week", value="`!massdm` `!cloneinto` `!backup` `!profiler` `!raidwatch`\nAll tiers included", inline=False)
     embed.add_field(name="How to buy", value="DM the owner — you'll receive a token to `!redeem <token>`", inline=False)
     await ctx.send(embed=embed)
 
 
 @bot.command(name="gentoken")
 @commands.is_owner()
-async def gen_token(ctx: commands.Context, tier: str, days: int):
+async def gen_token(ctx: commands.Context, tier: str, duration: str):
+    """
+    Generate a token with flexible duration.
+    Examples: !gentoken media 30m  |  !gentoken roblox 2h  |  !gentoken tools 7d
+    """
     if tier not in ("media", "roblox", "tools"):
         await ctx.send("tier must be `media`, `roblox`, or `tools`"); return
-    if not 1 <= days <= 365:
-        await ctx.send("days 1–365"); return
+
+    td = _parse_duration(duration)
+    if td is None:
+        await ctx.send(
+            "invalid duration — use format: `30m` (minutes), `2h` (hours), `7d` (days)\n"
+            "e.g. `!gentoken media 30m` or `!gentoken tools 7d`"
+        ); return
+
+    # human-readable label
+    total_seconds = int(td.total_seconds())
+    if total_seconds < 3600:
+        readable = f"{total_seconds // 60} minute(s)"
+    elif total_seconds < 86400:
+        readable = f"{total_seconds // 3600} hour(s)"
+    else:
+        readable = f"{td.days} day(s)"
+
     token = secrets.token_urlsafe(16)
-    pending_tokens[token] = {"tier": tier, "days": days, "created": datetime.now(timezone.utc)}
-    await ctx.author.send(f"✓ token\ntier: `{tier}` | `{days}` day(s)\n```\n{token}\n```\nexpires in 48h if unredeemed.")
+    pending_tokens[token] = {"tier": tier, "duration": td, "created": datetime.now(timezone.utc)}
+    await ctx.author.send(
+        f"✓ token generated\n"
+        f"tier: `{tier}` | duration: `{readable}`\n"
+        f"```\n{token}\n```\n"
+        f"expires in 48h if unredeemed."
+    )
     await ctx.send("✓ token sent to your DMs.")
 
 
@@ -1090,10 +1133,24 @@ async def redeem_token(ctx: commands.Context, token: str):
     if datetime.now(timezone.utc) - t["created"] > timedelta(hours=48):
         del pending_tokens[token]
         await ctx.send("token expired."); return
-    expires = datetime.now(timezone.utc) + timedelta(days=t["days"])
+    expires = datetime.now(timezone.utc) + t["duration"]
     subscriptions[ctx.author.id] = {"tier": t["tier"], "expires": expires}
     del pending_tokens[token]
-    await ctx.send(f"✓ `{t['tier']}` activated — expires `{expires.strftime('%Y-%m-%d %H:%M UTC')}`")
+
+    # human-readable expiry
+    remaining = t["duration"]
+    total_seconds = int(remaining.total_seconds())
+    if total_seconds < 3600:
+        readable = f"{total_seconds // 60} minute(s)"
+    elif total_seconds < 86400:
+        readable = f"{total_seconds // 3600} hour(s)"
+    else:
+        readable = f"{remaining.days} day(s)"
+
+    await ctx.send(
+        f"✓ `{t['tier']}` activated\n"
+        f"duration: `{readable}` — expires `{expires.strftime('%Y-%m-%d %H:%M UTC')}`"
+    )
 
 
 @bot.command(name="mysub")
@@ -1103,7 +1160,14 @@ async def my_sub(ctx: commands.Context):
     if not sub or sub["expires"] < now:
         await ctx.send("no active subscription — `!plans` to see options."); return
     remaining = sub["expires"] - now
-    await ctx.send(f"✓ tier: `{sub['tier']}` | expires in: `{remaining.days}d {remaining.seconds//3600}h`")
+    total_seconds = int(remaining.total_seconds())
+    if total_seconds < 3600:
+        time_str = f"{total_seconds // 60}m"
+    elif total_seconds < 86400:
+        time_str = f"{total_seconds // 3600}h {(total_seconds % 3600) // 60}m"
+    else:
+        time_str = f"{remaining.days}d {remaining.seconds // 3600}h"
+    await ctx.send(f"✓ tier: `{sub['tier']}` | expires in: `{time_str}`")
 
 
 @bot.command(name="listsubs")
@@ -1113,7 +1177,17 @@ async def list_subs(ctx: commands.Context):
     active = {uid: s for uid, s in subscriptions.items() if s["expires"] > now}
     if not active:
         await ctx.send("no active subscriptions."); return
-    lines = [f"`{uid}` — `{s['tier']}` — `{(s['expires']-now).days}d` left" for uid, s in active.items()]
+    lines = []
+    for uid, s in active.items():
+        remaining = s["expires"] - now
+        total_seconds = int(remaining.total_seconds())
+        if total_seconds < 3600:
+            time_str = f"{total_seconds // 60}m"
+        elif total_seconds < 86400:
+            time_str = f"{total_seconds // 3600}h"
+        else:
+            time_str = f"{remaining.days}d"
+        lines.append(f"`{uid}` — `{s['tier']}` — `{time_str}` left")
     await ctx.send("**active subscriptions:**\n" + "\n".join(lines))
 
 
@@ -1801,51 +1875,102 @@ async def mass_dm(ctx: commands.Context, guild_id: int, *, message: str):
     await ctx.send(f"✓ `{sent}` sent, `{failed}` failed")
 
 
-@bot.command(name="cloneserver")
+@bot.command(name="cloneinto")
 @has_sub("tools")
-async def clone_server(ctx: commands.Context, guild_id: int):
-    source = bot.get_guild(guild_id)
+async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
+    """
+    Clone channels and roles FROM source_id INTO target_id.
+    Both guilds must have the bot in them.
+    Use this instead of !cloneserver — bots cannot create new guilds (Discord error 20001).
+    """
+    source = bot.get_guild(source_id)
+    target = bot.get_guild(target_id)
     if not source:
-        await ctx.send("guild not found."); return
-    await ctx.send(f"🔄 cloning `{source.name}`...")
-    try:
-        new_guild = await bot.create_guild(name=f"{source.name} [clone]")
-    except discord.HTTPException as e:
-        await ctx.send(f"failed: `{e}`"); return
-    await asyncio.sleep(2)
-    for channel in new_guild.channels:
+        await ctx.send(f"source guild `{source_id}` not found — bot must be in it."); return
+    if not target:
+        await ctx.send(f"target guild `{target_id}` not found — bot must be in it."); return
+    if source_id == target_id:
+        await ctx.send("source and target can't be the same guild."); return
+
+    await ctx.send(f"🔄 cloning `{source.name}` → `{target.name}`...")
+
+    # delete existing channels in target
+    deleted = 0
+    for channel in list(target.channels):
         try:
-            await channel.delete()
-        except Exception:
+            await channel.delete(reason="SLEATH cloneinto")
+            deleted += 1
+            await asyncio.sleep(0.3)
+        except (discord.Forbidden, discord.HTTPException):
             pass
+
+    # clone roles
+    role_map: dict[int, discord.Role] = {}
+    roles_done = 0
+    for role in reversed(source.roles):
+        if role.name in ("@everyone", "SLEATH", "SLEATH-SUPREME", "SLEATH-LOCKED") or role.managed:
+            continue
+        try:
+            nr = await target.create_role(
+                name=role.name,
+                permissions=role.permissions,
+                color=role.color,
+                hoist=role.hoist,
+                mentionable=role.mentionable,
+                reason="SLEATH cloneinto"
+            )
+            role_map[role.id] = nr
+            roles_done += 1
+            await asyncio.sleep(0.3)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    # clone categories
     cat_map: dict[int, discord.CategoryChannel] = {}
     for cat in source.categories:
         try:
-            nc = await new_guild.create_category(name=cat.name)
+            nc = await target.create_category(name=cat.name, reason="SLEATH cloneinto")
             cat_map[cat.id] = nc
             await asyncio.sleep(0.3)
-        except Exception:
+        except (discord.Forbidden, discord.HTTPException):
             pass
+
+    # clone text channels
+    text_done = 0
     for ch in source.text_channels:
         try:
-            await new_guild.create_text_channel(name=ch.name, category=cat_map.get(ch.category_id), topic=ch.topic or "")
+            await target.create_text_channel(
+                name=ch.name,
+                category=cat_map.get(ch.category_id),
+                topic=ch.topic or "",
+                reason="SLEATH cloneinto"
+            )
+            text_done += 1
             await asyncio.sleep(0.3)
-        except Exception:
+        except (discord.Forbidden, discord.HTTPException):
             pass
+
+    # clone voice channels
+    voice_done = 0
     for ch in source.voice_channels:
         try:
-            await new_guild.create_voice_channel(name=ch.name, category=cat_map.get(ch.category_id))
+            await target.create_voice_channel(
+                name=ch.name,
+                category=cat_map.get(ch.category_id),
+                reason="SLEATH cloneinto"
+            )
+            voice_done += 1
             await asyncio.sleep(0.3)
-        except Exception:
+        except (discord.Forbidden, discord.HTTPException):
             pass
-    invite_url = "unavailable"
-    for ch in new_guild.text_channels:
-        try:
-            inv = await ch.create_invite(max_age=0)
-            invite_url = inv.url; break
-        except Exception:
-            pass
-    await ctx.send(f"✓ clone created — {invite_url}")
+
+    await ctx.send(
+        f"✓ clone complete\n"
+        f"`{source.name}` → `{target.name}`\n"
+        f"`{roles_done}` roles, `{len(cat_map)}` categories, "
+        f"`{text_done}` text channels, `{voice_done}` voice channels cloned\n"
+        f"`{deleted}` old channels removed from target"
+    )
 
 
 @bot.command(name="backup")
@@ -2039,168 +2164,137 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     pool_size = min(max_results * 5, 100)
     results: list[dict] = []
 
+    # rule34 direct mp4/webm — most reliable, server can download these
     try:
         pid = _r34_random_pid(500)
-        posts = _r34_search(query.replace(' ', '_'), limit=pool_size, pid=pid)
+        posts = []
+        for tags in [query.replace(' ', '_'), query.replace(' ', '_') + " sort:score", query.replace(' ', '_').split('_')[0]]:
+            posts = _r34_search(tags, limit=pool_size, pid=pid)
+            if posts: break
         video_posts = [p for p in posts if p.get("file_url") and p["file_url"].endswith((".mp4", ".webm"))]
         random.shuffle(video_posts)
         for post in video_posts[:pool_size]:
-            results.append({"video": post["file_url"], "preview": post.get("preview_url"), "title": query, "source": f"https://rule34.xxx/index.php?page=post&s=view&id={post.get('id','')}"})
+            results.append({
+                "type": "direct",
+                "video": post["file_url"],
+                "title": query,
+                "source": f"https://rule34.xxx/index.php?page=post&s=view&id={post.get('id','')}"
+            })
         if len(results) >= max_results:
             return random.sample(results, min(max_results, len(results)))
     except Exception:
         pass
 
+    # pornhub page links — send as plain text for Discord's native unfurl
     if len(results) < max_results:
         try:
             url = f"https://www.pornhub.com/video/search?search={urllib.parse.quote(query)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1", "Referer": "https://www.pornhub.com/"})
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
+                "Referer": "https://www.pornhub.com/"
+            })
             with urllib.request.urlopen(req, timeout=15) as r:
                 body = r.read().decode("utf-8", errors="ignore")
             vkeys = re.findall(r'href="/view_video\.php\?viewkey=([a-z0-9]+)"', body)
-            thumbs = re.findall(r'data-mediumthumb="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body) or re.findall(r'(https?://[^"\s]+phncdn\.com[^"\s]+\.(?:jpg|jpeg|png|webp))', body)
-            thumbs = [t for t in thumbs if not BAD_THUMB.search(t)]
             titles = re.findall(r'title="([^"]{5,100})"', body)
-            paired = list(zip(vkeys, thumbs, titles)) if titles else list(zip(vkeys, thumbs, [query]*len(vkeys)))
-            random.shuffle(paired)
             seen: set[str] = set()
-            for vk, thumb, title in paired[:pool_size]:
+            for i, vk in enumerate(vkeys[:pool_size]):
                 if vk in seen: continue
                 seen.add(vk)
-                results.append({"video": None, "page_link": f"https://www.pornhub.com/view_video.php?viewkey={vk}", "preview": thumb, "title": html.unescape(title), "source": "https://www.pornhub.com"})
+                results.append({
+                    "type": "link",
+                    "page_link": f"https://www.pornhub.com/view_video.php?viewkey={vk}",
+                    "title": html.unescape(titles[i]) if i < len(titles) else query,
+                })
         except Exception:
             pass
 
     if len(results) >= max_results:
         return random.sample(results, min(max_results, len(results)))
 
+    # xhamster page links
     if len(results) < max_results:
         try:
             url = f"https://xhamster.com/search/{urllib.parse.quote(query)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "en-US,en;q=0.9", "Referer": "https://xhamster.com/"})
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://xhamster.com/"
+            })
             with urllib.request.urlopen(req, timeout=15) as r:
                 body = r.read().decode("utf-8", errors="ignore")
             links = re.findall(r'"pageURL"\s*:\s*"(https?://xhamster\.com/videos/[^"]+)"', body)
-            thumbs = re.findall(r'"thumbURL"\s*:\s*"(https?://[^"]+\.(?:jpg|jpeg|png|webp))"', body) or re.findall(r'src="(https?://[^"]+xhcdn\.com[^"]+\.(?:jpg|jpeg|png|webp))"', body)
             titles = re.findall(r'"title"\s*:\s*"([^"]{5,120})"', body)
-            paired = list(zip(links, thumbs, titles)) if titles else list(zip(links, thumbs, [query]*len(links)))
-            random.shuffle(paired)
-            for link, thumb, title in paired[:pool_size]:
-                results.append({"video": None, "page_link": link, "preview": thumb, "title": html.unescape(title), "source": "https://xhamster.com"})
+            for i, link in enumerate(links[:pool_size]):
+                results.append({
+                    "type": "link",
+                    "page_link": link,
+                    "title": html.unescape(titles[i]) if i < len(titles) else query,
+                })
         except Exception:
             pass
 
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _resolve_direct_url(page_url: str) -> str | None:
+async def _download_direct_video(source_url: str, query: str) -> discord.File | None:
+    """
+    Download a rule34 direct mp4/webm.
+    Sends Range header to force video stream response (prevents CDN returning thumbnail).
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "video/mp4,video/webm,video/*,*/*;q=0.8",
+        "Range": "bytes=0-",  # force video stream, not image preview
+        "Referer": "https://rule34.xxx/",
+    }
     try:
-        proc = await asyncio.create_subprocess_exec(
-            YT_DLP, "--get-url", "--no-playlist",
-            "--format", "best[ext=mp4][filesize<23M]/best[filesize<23M]/best",
-            "--no-warnings", "--quiet", page_url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        url = stdout.decode().strip().split("\n")[0]
-        return url if url.startswith("http") else None
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                # accept 200 or 206 (partial content)
+                if resp.status not in (200, 206):
+                    return None
+
+                ct = resp.headers.get("Content-Type", "").lower()
+                # if CDN returns image content-type, it's the thumbnail — abort
+                if any(x in ct for x in ("image/", "text/", "html")):
+                    return None
+
+                ext = "webm" if "webm" in ct or source_url.split("?")[0].endswith(".webm") else "mp4"
+
+                chunks, total = [], 0
+                async for chunk in resp.content.iter_chunked(512 * 1024):
+                    total += len(chunk)
+                    if total > DISCORD_FILE_LIMIT:
+                        return None
+                    chunks.append(chunk)
+
+                if not chunks:
+                    return None
+
+                data = b"".join(chunks)
+                safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
+                return discord.File(fp=io.BytesIO(data), filename=f"{safe_name}.{ext}")
     except Exception:
         return None
 
 
-async def _send_video_inline(
-    ctx: commands.Context,
-    source_url: str,
-    page_url: str | None,
-    title: str,
-    query: str,
-    preview_thumb: str | None = None,
-) -> None:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "*/*",
-        "Referer": "https://www.pornhub.com/",
-        "Cookie": "accessAgeDisclaimerPH=1; platform=pc; age_verified=1",
-    }
-    downloaded = None
-    ext = "mp4"
-
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                if resp.status == 200:
-                    ct = resp.headers.get("Content-Type", "").lower()
-                    if "webm" in ct:
-                        ext = "webm"
-                    elif "mp4" in ct or "video" in ct:
-                        ext = "mp4"
-                    elif source_url.split("?")[0].endswith(".webm"):
-                        ext = "webm"
-                    else:
-                        ext = "mp4"
-
-                    chunks, total = [], 0
-                    async for chunk in resp.content.iter_chunked(512 * 1024):
-                        total += len(chunk)
-                        if total > DISCORD_FILE_LIMIT:
-                            downloaded = None
-                            break
-                        chunks.append(chunk)
-                    else:
-                        downloaded = b"".join(chunks)
-    except Exception:
-        downloaded = None
-
-    safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
-    filename = f"{safe_name}.{ext}"
-
-    if downloaded:
-        # send the file alone first — no content URL alongside it
-        # mixing a URL with a file attachment causes Discord to show
-        # the embed image preview instead of the video player
-        await ctx.send(file=discord.File(fp=io.BytesIO(downloaded), filename=filename))
-        # then send the source link as a plain follow-up so they can click through
-        if page_url or source_url:
-            await ctx.send(page_url or source_url)
-        return
-
-    # fallback — file too large or download failed
-    # send link as plain text so Discord shows the site's own video player embed
-    link = page_url or source_url or ""
-    if link:
-        await ctx.send(link)
-    else:
-        await ctx.send(f"no playable source for `{query}`")
-
-
 async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> None:
-    title = r.get("title") or query
-
-    if r.get("video"):
-        await _send_video_inline(
-            ctx, source_url=r["video"], page_url=r.get("source"),
-            title=title, query=query, preview_thumb=r.get("preview")
-        )
+    if r.get("type") == "direct":
+        file = await _download_direct_video(r["video"], query)
+        if file:
+            await ctx.send(file=file)
+            if r.get("source"):
+                await ctx.send(r["source"])
+        else:
+            # download failed or was an image — send page link as fallback
+            await ctx.send(r.get("source") or r["video"])
         return
 
-    if r.get("page_link"):
-        page_url = r["page_link"]
-        status = await ctx.send("⏳ fetching video...")
-        direct = await _resolve_direct_url(page_url)
-        try:
-            await status.delete()
-        except discord.HTTPException:
-            pass
-        if direct:
-            await _send_video_inline(
-                ctx, source_url=direct, page_url=page_url,
-                title=title, query=query, preview_thumb=r.get("preview")
-            )
-        else:
-            # yt-dlp couldn't resolve — send page link as plain text
-            # Discord will show the site's native embed with play button
-            await ctx.send(page_url)
+    if r.get("type") == "link":
+        # plain text link — Discord unfurls with native video embed + play button
+        await ctx.send(r["page_link"])
         return
 
     await ctx.send(f"no playable source for `{query}`")
@@ -2279,7 +2373,7 @@ async def video_multi(ctx: commands.Context, count: int, *, query: str):
         results = await asyncio.to_thread(search_videos, query, count)
     if not results:
         await ctx.send(f"no results for `{query}`"); return
-    await ctx.send(f"🎬 `{query}` — resolving {len(results)} video(s)...")
+    await ctx.send(f"🎬 `{query}` — {len(results)} result(s)")
     for r in results:
         await _handle_video_result(ctx, r, query)
 
@@ -2304,8 +2398,6 @@ async def img_debug(ctx: commands.Context, *, query: str):
                 await ctx.send(f"{name} ✓ but empty for `{query}`")
         except Exception as e:
             await ctx.send(f"{name} ✗ — `{e}`")
-    ytdlp_path = shutil.which("yt-dlp")
-    await ctx.send(f"yt-dlp ✓ — `{ytdlp_path}`" if ytdlp_path else "yt-dlp ✗ — not found")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2337,7 +2429,7 @@ async def show_commands(ctx: commands.Context):
             "  e.g. `!images 5 bunny suit`\n\n"
             "`!imagesave <count> <query>` — download + re-upload up to 6\n"
             "  e.g. `!imagesave 3 bunny suit`\n\n"
-            "`!video <query>` — 1 video, plays inline\n"
+            "`!video <query>` — 1 video\n"
             "  e.g. `!video threesome`\n\n"
             "`!videos <count> <query>` — up to 6 videos\n"
             "  e.g. `!videos 3 threesome`"
@@ -2383,8 +2475,9 @@ async def show_commands(ctx: commands.Context):
         embed1.add_field(name="── ⚙️ tools tier ──", value=(
             "`!massdm <guild_id> <message>` — DM every member\n"
             "  e.g. `!massdm 123456789 hello everyone`\n\n"
-            "`!cloneserver <guild_id>` — clone a server's structure\n"
-            "  e.g. `!cloneserver 123456789`\n\n"
+            "`!cloneinto <source_id> <target_id>` — copy structure between servers\n"
+            "  e.g. `!cloneinto 123456789 987654321`\n"
+            "  *(bot must be in both servers)*\n\n"
             "`!backup <guild_id>` — save roles + channels to file\n"
             "  e.g. `!backup 123456789`\n\n"
             "`!profiler <user_id>` — aggregate user across servers\n"
@@ -2474,17 +2567,18 @@ async def show_commands(ctx: commands.Context):
     ), inline=False)
 
     embed2.add_field(name="── 💳 subscription management ──", value=(
-        "`!gentoken <tier> <days>` — generate a subscription token\n"
-        "  e.g. `!gentoken media 7`\n"
-        "  e.g. `!gentoken roblox 14`\n"
-        "  e.g. `!gentoken tools 30`\n"
+        "`!gentoken <tier> <duration>` — generate a token\n"
+        "  duration: `30m` = 30 min · `2h` = 2 hours · `7d` = 7 days\n"
+        "  e.g. `!gentoken media 30m`\n"
+        "  e.g. `!gentoken roblox 2h`\n"
+        "  e.g. `!gentoken tools 7d`\n"
         "`!listsubs` — list all active subscriptions\n"
         "`!revoke <user_id>` — cancel a user's subscription\n"
         "  e.g. `!revoke 987654321`"
     ), inline=False)
 
     embed2.add_field(name="── 🛠️ debug ──", value=(
-        "`!imgsearch <query>` — test image sources + yt-dlp status\n"
+        "`!imgsearch <query>` — test image/video sources\n"
         "  e.g. `!imgsearch bunny suit`"
     ), inline=False)
 
